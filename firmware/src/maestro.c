@@ -180,6 +180,7 @@ static void render_book(void) {
     uint16_t i;
     const lesson_t *L = pieces[sel];
     book_title(title);
+    ui_paper();                              /* static areas drawn once */
     ui_clear();
     ui_staff_cols(0u, 240u);
     for (i = 0; i < L->event_count; i++) {
@@ -204,6 +205,8 @@ static void start_play(void) {
     grade_init(&gr);
     tally = 0;
     for (i = 0; i < 8u; i++) ov[i].until = 0;
+    ui_paper();                              /* static areas drawn once */
+    ui_title(pl->title);
     ui_clear();
     ui_staff_cols(0u, 240u);
     state = ST_PLAY;
@@ -270,7 +273,6 @@ static void play_frame(void) {
         return;
     }
     ui_blit();
-    ui_title(pl->title);
     ui_cursor(cursor_x());
     for (i = 0; i < 8u; i++)
         if (ov[i].until && (int32_t)(now - ov[i].until) < 0)

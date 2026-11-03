@@ -9,11 +9,18 @@
 #define HIT_C 0x07E0u    /* green */
 #define MISS_C 0xF800u   /* red */
 
-static uint8_t pfb[240][30];                 /* 1 = ink */
+static uint8_t pfb[SCROLL_H][30];         /* 1 = ink, scroll region only */
 static uint16_t strip[240 * 12];            /* blit staging, 12 rows */
 
+/* full screen to paper (the static areas are drawn once and persist) */
+void ui_paper(void) {
+    lcd_fill(0u, 0u, 240u, 240u, PAPER);
+}
+
 static void px(uint32_t x, uint32_t y) {
-    if (x < 240u && y < 240u) pfb[y][x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
+    if (x >= 240u || y < SCROLL_TOP || y >= SCROLL_TOP + SCROLL_H) return;
+    y -= SCROLL_TOP;
+    pfb[y][x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
 }
 static void hline(uint32_t x0, uint32_t x1, uint32_t y) {
     uint32_t x;
@@ -27,15 +34,15 @@ static void vline(uint32_t x, uint32_t y0, uint32_t y1) {
 
 void ui_clear(void) {
     uint32_t y, i;
-    for (y = 0; y < 240u; y++)
+    for (y = 0; y < SCROLL_H; y++)
         for (i = 0; i < 30u; i++) pfb[y][i] = 0;
 }
 
-/* shift the whole buffer left by dx pixels (dx < 240) */
+/* shift the scroll region left by dx pixels (dx < 240) */
 void ui_scroll_px(uint32_t dx) {
     uint32_t y, i;
     while (dx >= 8u) {                       /* whole bytes first */
-        for (y = 0; y < 240u; y++) {
+        for (y = 0; y < SCROLL_H; y++) {
             uint8_t *r = pfb[y];
             for (i = 0; i < 29u; i++) r[i] = r[i + 1];
             r[29] = 0;
@@ -43,7 +50,7 @@ void ui_scroll_px(uint32_t dx) {
         dx -= 8u;
     }
     if (dx) {                                /* remaining bits, back to front */
-        for (y = 0; y < 240u; y++) {
+        for (y = 0; y < SCROLL_H; y++) {
             uint8_t *r = pfb[y];
             uint8_t carry = 0;
             for (i = 29u; ; i--) {
@@ -146,7 +153,7 @@ void ui_rest(uint32_t x, uint32_t ticks) {
     }
 }
 
-/* expand one buffer row to RGB565, byte-swapped for the LCD (like lcd_fill) */
+/* expand one region row to RGB565, byte-swapped for the LCD (like lcd_fill) */
 static void expand_row(uint32_t y, uint16_t *dst) {
     uint32_t i, x;
     uint8_t *r = pfb[y];
@@ -161,10 +168,10 @@ static void expand_row(uint32_t y, uint16_t *dst) {
 
 void ui_blit(void) {
     uint32_t y, s;
-    for (s = 0; s < 20u; s++) {               /* 20 strips of 12 rows */
+    for (s = 0; s < SCROLL_H / 12u; s++) {    /* 12-row strips over the region */
         for (y = 0; y < 12u; y++)
             expand_row(s * 12u + y, strip + y * 240u);
-        lcd_blit(0, s * 12u, 240u, 12u, strip);
+        lcd_blit(0, SCROLL_TOP + s * 12u, 240u, 12u, strip);
     }
 }
 

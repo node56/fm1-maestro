@@ -18,8 +18,13 @@
 #define TITLE_Y 10u
 #define TALLY_Y 208u
 
-/* 1-bit buffer */
-void ui_clear(void);                       /* wipe the buffer */
+/* the scroll region: only this band moves; title/hints are drawn once */
+#define SCROLL_TOP 72u
+#define SCROLL_H 160u        /* 72..232: staff, stems, ledger lines, cursor */
+
+/* 1-bit buffer (scroll region only) */
+void ui_paper(void);                       /* full screen to paper, once */
+void ui_clear(void);                       /* wipe the scroll region */
 void ui_scroll_px(uint32_t dx);            /* shift the buffer left by dx px */
 void ui_staff_cols(uint32_t x0, uint32_t x1); /* draw staff lines for columns [x0,x1) */
 
