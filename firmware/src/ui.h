@@ -1,41 +1,47 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* Maestro v0.1: smooth side-scrolling treble staff.
+ *
+ * The screen is sheet music. Rendering uses a 1-bit offscreen buffer
+ * (240x240x1 = 7200 B): each frame the buffer shifts left by the scroll
+ * delta, only the newly exposed right columns are drawn from the piece
+ * data, then the buffer is expanded to RGB565 and blitted. No full-screen
+ * clear per frame, no flicker.
+ */
 #ifndef MAESTRO_UI_H
 #define MAESTRO_UI_H
-
-/* 240x240 screen layout for the lesson UI.
- * Thin wrappers over plat_* (platform_api.h); the layout math here
- * is real, the drawing calls bind at integration time.
- * (practice_t is declared in lesson.h.)
- */
-
 #include <stdint.h>
-#include "lesson.h"
-#include "grade.h"
 
-/* RGB565 colors */
-#define UI_BLACK   0x0000u
-#define UI_WHITE   0xFFFFu
-#define UI_GREEN   0x07E0u
-#define UI_RED     0xF800u
-#define UI_YELLOW  0xFFE0u
-#define UI_BLUE    0x001Fu
-#define UI_GREY    0x8410u
-#define UI_DKGREY  0x4208u
+/* staff geometry (240x240) */
+#define STAFF_TOP 94u        /* F6, top line */
+#define STAFF_SPC 14u        /* line spacing */
+#define STAFF_BOT 150u       /* E5, bottom line */
+#define TITLE_Y 10u
+#define TALLY_Y 208u
 
-void ui_clear(void);
+/* 1-bit buffer */
+void ui_clear(void);                       /* wipe the buffer */
+void ui_scroll_px(uint32_t dx);            /* shift the buffer left by dx px */
+void ui_staff_cols(uint32_t x0, uint32_t x1); /* draw staff lines for columns [x0,x1) */
 
-/* Lesson select list. `titles`/`stars`/`count` from the lesson index;
- * `selected` is the highlighted row. */
-void ui_lesson_list(const char **titles, const uint8_t *stars,
-                    uint8_t count, uint8_t selected);
+/* notation, drawn at absolute buffer x. y follows the staff. */
+int32_t ui_dia(int32_t midi);              /* diatonic steps, E5 == 37 */
+uint32_t ui_y_of(int32_t dia);             /* buffer y for a diatonic step */
+void ui_note(uint32_t x, int32_t midi, uint32_t ticks);
+void ui_rest(uint32_t x, uint32_t ticks);
 
-/* Practice screen: piano roll of the lesson around the play line,
- * mini key-strip at the bottom, score/streak on top.
- * `hit_flash`/`miss_flash`: frames remaining for feedback flashes. */
-void ui_practice(practice_t *p, const grade_t *g,
-                 uint8_t hit_flash, uint8_t miss_flash,
-                 uint8_t key_base_midi, uint8_t key_count);
+/* push the buffer to the LCD */
+void ui_blit(void);
 
-/* Results screen. */
-void ui_results(const grade_t *g, const char *title, uint8_t is_best);
+/* text / cursor / played-note overlay, drawn on the LCD after the blit */
+void ui_title(const char *s);
+void ui_tally(const char *s);
+void ui_indic(const char *s);
+void ui_hint(const char *s);
+void ui_cursor(uint32_t x);
+void ui_played(uint32_t x, int32_t midi, uint32_t color); /* notehead overlay */
+#define UI_HIT_C 0x07E0u   /* green */
+#define UI_MISS_C 0xF800u  /* red */
+#define UI_PAPER 0xF7BCu   /* warm paper */
+#define UI_INK 0x0000u
 
-#endif /* MAESTRO_UI_H */
+#endif

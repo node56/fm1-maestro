@@ -1,174 +1,207 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* Maestro v0.1 staff renderer: 1-bit scroll buffer -> RGB565 blit. */
 #include "ui.h"
-#include "platform_api.h"
 
-#include <stddef.h>
+/* colors are RGB565; INK/PAPER chosen here, accents passed in */
+#define PAPER UI_PAPER
+#define INK UI_INK
+#define CURSOR_C 0xFCE0u /* amber */
+#define HIT_C 0x07E0u    /* green */
+#define MISS_C 0xF800u   /* red */
 
-/* Layout (240x240):
- *   top bar:    y 0..23   (title, score, streak)
- *   roll area:  y 24..199  (notes scroll right -> left to play line)
- *   key strip:  y 200..239 (mini keyboard map)
- */
+static uint8_t pfb[240][30];                 /* 1 = ink */
+static uint16_t strip[240 * 12];            /* blit staging, 12 rows */
 
-#define TOP_H      24
-#define ROLL_TOP   24
-#define ROLL_BOT   199
-#define STRIP_TOP  200
-#define PLAY_X     60          /* play line x */
-#define PX_PER_TICK_DEN 2      /* horizontal scale: 1 tick = 1/2 px */
+static void px(uint32_t x, uint32_t y) {
+    if (x < 240u && y < 240u) pfb[y][x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
+}
+static void hline(uint32_t x0, uint32_t x1, uint32_t y) {
+    uint32_t x;
+    for (x = x0; x < x1; x++) px(x, y);
+}
+static void vline(uint32_t x, uint32_t y0, uint32_t y1) {
+    uint32_t y;
+    if (y1 < y0) { uint32_t t = y0; y0 = y1; y1 = t; }
+    for (y = y0; y <= y1; y++) px(x, y);
+}
 
 void ui_clear(void) {
-    plat_clear(UI_BLACK);
+    uint32_t y, i;
+    for (y = 0; y < 240u; y++)
+        for (i = 0; i < 30u; i++) pfb[y][i] = 0;
 }
 
-void ui_lesson_list(const char **titles, const uint8_t *stars,
-                    uint8_t count, uint8_t selected) {
-    uint8_t i;
-    char buf[56];
-    ui_clear();
-    plat_text(8, 4, 1, "MAESTRO - lessons", UI_YELLOW);
-    for (i = 0; i < count && i < 8; i++) {
-        int y = 28 + (int)i * 24;
-        uint16_t c = (i == selected) ? UI_BLACK : UI_WHITE;
-        if (i == selected)
-            plat_rect(4, y - 2, 232, 22, UI_YELLOW);
-        /* title (truncated) + stars, e.g. "Ode to Joy  **" */
-        {
-            uint8_t s = 0;
-            const char *t = titles[i];
-            while (s < 40 && t[s]) { buf[s] = t[s]; s++; }
-            buf[s++] = ' ';
-            {
-                uint8_t k;
-                for (k = 0; k < stars[i] && k < 3; k++) buf[s++] = '*';
-            }
-            buf[s] = '\0';
+/* shift the whole buffer left by dx pixels (dx < 240) */
+void ui_scroll_px(uint32_t dx) {
+    uint32_t y, i;
+    while (dx >= 8u) {                       /* whole bytes first */
+        for (y = 0; y < 240u; y++) {
+            uint8_t *r = pfb[y];
+            for (i = 0; i < 29u; i++) r[i] = r[i + 1];
+            r[29] = 0;
         }
-        plat_text(10, y, 1, buf, c);
+        dx -= 8u;
     }
-    plat_present();
-}
-
-void ui_practice(practice_t *p, const grade_t *g,
-                 uint8_t hit_flash, uint8_t miss_flash,
-                 uint8_t key_base_midi, uint8_t key_count) {
-    char buf[40];
-    uint16_t i;
-    uint32_t now = p->now;
-    uint8_t nkeys = key_count ? key_count : 27;
-
-    ui_clear();
-
-    /* top bar */
-    plat_rect(0, 0, 240, TOP_H, UI_DKGREY);
-    {
-        uint8_t s = 0;
-        const char *t = p->lesson->title;
-        while (s < 22 && t[s]) { buf[s] = t[s]; s++; }
-        buf[s] = '\0';
-        plat_text(6, 6, 1, buf, UI_WHITE);
-        /* score right-aligned (integer percent) */
-        buf[0] = (char)('0' + (g->score / 10000) % 10);
-        buf[1] = (char)('0' + (g->score / 1000) % 10);
-        buf[2] = (char)('0' + (g->score / 100) % 10);
-        buf[3] = '%';
-        buf[4] = '\0';
-        plat_text(196, 6, 1, buf, UI_GREEN);
-    }
-    /* play line */
-    plat_line(PLAY_X, ROLL_TOP, PLAY_X, ROLL_BOT, UI_GREY);
-
-    /* note bars: map pitch -> y, time -> x */
-    {
-        uint32_t acc = 0;
-        uint8_t lo = 255, hi = 0;
-        /* find pitch range first (cheap, <=256 events) */
-        for (i = 0; i < p->lesson->event_count; i++) {
-            const lesson_event_t *e = &p->lesson->events[i];
-            if (!e->is_rest) {
-                if (e->midi < lo) lo = e->midi;
-                if (e->midi > hi) hi = e->midi;
+    if (dx) {                                /* remaining bits, back to front */
+        for (y = 0; y < 240u; y++) {
+            uint8_t *r = pfb[y];
+            uint8_t carry = 0;
+            for (i = 29u; ; i--) {
+                uint8_t b = r[i];
+                r[i] = (uint8_t)((b << dx) | carry);
+                carry = (uint8_t)(b >> (8u - dx));
+                if (!i) break;
             }
         }
-        if (hi < lo) { lo = 60; hi = 72; }
-        for (i = 0; i < p->lesson->event_count; i++) {
-            const lesson_event_t *e = &p->lesson->events[i];
-            int32_t x0, x1, y, h;
-            uint16_t color;
-            if (e->is_rest) { acc += e->ticks; continue; }
-            x0 = PLAY_X + (int32_t)((int32_t)(acc - now) / PX_PER_TICK_DEN);
-            x1 = x0 + (int32_t)(e->ticks / PX_PER_TICK_DEN);
-            acc += e->ticks;
-            if (x1 < 0 || x0 > 240) continue;
-            if (x0 < 0) x0 = 0;
-            if (x1 > 240) x1 = 240;
-            h = (ROLL_BOT - ROLL_TOP) / (int32_t)(hi - lo + 1);
-            if (h < 3) h = 3;
-            y = ROLL_BOT - (int32_t)(e->midi - lo + 1) * h;
-            color = (i < p->idx) ? UI_DKGREY
-                  : (i == p->idx) ? UI_YELLOW : UI_BLUE;
-            plat_rect(x0, y, (uint16_t)(x1 - x0), (uint16_t)h, color);
-        }
     }
-
-    /* key strip: highlight expected key + pressed keys */
-    {
-        const lesson_event_t *cur = NULL;
-        uint8_t k;
-        int w = 240 / nkeys;
-        if (!practice_done(p))
-            cur = practice_current(p);
-        for (k = 0; k < nkeys; k++) {
-            int x = (int)k * w;
-            uint8_t midi = (uint8_t)(key_base_midi + k);
-            uint16_t c = UI_GREY;
-            if (cur && !cur->is_rest && cur->midi == midi) c = UI_YELLOW;
-            if (plat_key_down(k)) c = (c == UI_YELLOW) ? UI_GREEN : UI_WHITE;
-            plat_rect(x, STRIP_TOP, (uint16_t)(w - 1), 240 - STRIP_TOP, c);
-        }
-    }
-
-    /* hit/miss flash border */
-    if (hit_flash)  plat_rect(0, 0, 240, 240, UI_GREEN);   /* TODO: border only */
-    if (miss_flash) plat_rect(0, 0, 240, 240, UI_RED);
-    plat_present();
 }
 
-void ui_results(const grade_t *g, const char *title, uint8_t is_best) {
-    char buf[40];
-    uint8_t s, k;
-    ui_clear();
-    plat_text(8, 8, 1, title, UI_YELLOW);
-    /* score as percent with one decimal, integer math */
-    buf[0] = (char)('0' + (g->score / 10000) % 10);
-    buf[1] = (char)('0' + (g->score / 1000) % 10);
-    buf[2] = (char)('0' + (g->score / 100) % 10);
-    buf[3] = '.';
-    buf[4] = (char)('0' + (g->score / 10) % 10);
-    buf[5] = '%';
-    buf[6] = '\0';
-    plat_text(8, 40, 2, buf, UI_WHITE);
-    /* stars */
-    s = grade_stars(g);
-    for (k = 0; k < 3; k++) {
-        int x = 8 + (int)k * 40;
-        if (k < s) plat_rect(x, 80, 32, 32, UI_YELLOW);
-        else       plat_rect(x, 80, 32, 32, UI_DKGREY);
+void ui_staff_cols(uint32_t x0, uint32_t x1) {
+    uint32_t l, x;
+    if (x1 > 240u) x1 = 240u;
+    for (l = 0; l < 5u; l++) {
+        uint32_t y = STAFF_TOP + l * STAFF_SPC;
+        for (x = x0; x < x1; x++) px(x, y);
     }
-    /* best streak */
-    {
-        uint8_t n = 0;
-        uint16_t v = g->best_streak;
-        char tmp[8];
-        int t = 0;
-        if (v == 0) tmp[t++] = '0';
-        while (v > 0 && t < 7) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
-        buf[0] = 's'; buf[1] = 't'; buf[2] = 'r'; buf[3] = 'e';
-        buf[4] = 'a'; buf[5] = 'k'; buf[6] = ' '; n = 7;
-        while (t > 0 && n < 38) buf[n++] = tmp[--t];
-        buf[n] = '\0';
-        plat_text(8, 130, 1, buf, UI_GREEN);
-    }
-    if (is_best) plat_text(8, 160, 1, "new best!", UI_YELLOW);
-    plat_text(8, 200, 1, "PLAY: retry  ENC: next", UI_GREY);
-    plat_present();
 }
+
+/* diatonic steps; our convention C5 == MIDI 60, E5 (bottom line) == 37 */
+int32_t ui_dia(int32_t midi) {
+    static const int8_t L[12] = {0,-1,1,-1,2,3,-1,4,-1,5,-1,6}; /* C..B, -1 = sharp */
+    int32_t letter = L[midi % 12];
+    if (letter < 0) letter = L[(midi - 1) % 12];  /* sharps: snap down (never happens in our pieces) */
+    return (midi / 12) * 7 + letter;
+}
+uint32_t ui_y_of(int32_t dia) {
+    return STAFF_BOT - (uint32_t)((dia - 37) * (int32_t)(STAFF_SPC / 2));
+}
+
+static void ledgers(uint32_t x, int32_t dia) {
+    int32_t dd;
+    for (dd = 35; dd >= dia && dd >= 31; dd -= 2)
+        hline(x - 11u, x + 12u, ui_y_of(dd));
+    for (dd = 47; dd <= dia; dd += 2)
+        hline(x - 11u, x + 12u, ui_y_of(dd));
+}
+
+static void head(uint32_t x, uint32_t y, uint32_t open) {
+    /* filled ellipse rx=7 ry=5; open heads: clear the middle */
+    int32_t dy, dx, rx = 7, ry = 5;
+    for (dy = -ry; dy <= ry; dy++) {
+        /* dx = rx*sqrt(1-(dy/ry)^2), integer: binary-search-free approx via squares */
+        int32_t q = (int32_t)ry * ry - dy * dy;
+        int32_t dxi = 0;
+        while ((dxi + 1) * (dxi + 1) * ry * ry <= q * rx * rx) dxi++;
+        for (dx = -dxi; dx <= dxi; dx++) {
+            if (open && dxi - (dx < 0 ? -dx : dx) > 2 && dy > -ry + 2 && dy < ry - 2)
+                continue;                    /* hollow middle */
+            px(x + dx, y + dy);
+        }
+    }
+}
+
+static void stem(uint32_t x, uint32_t y, int32_t dia) {
+    int32_t up = dia < 41;                   /* below the middle line (B5) */
+    uint32_t sx = up ? x + 6u : x - 6u;
+    uint32_t len = 35u;
+    if (up) vline(sx, y - len, y);
+    else vline(sx, y, y + len);
+}
+
+static void flag_up(uint32_t x, uint32_t y) {
+    /* eighth-note flag: short diagonal from the stem top */
+    uint32_t i;
+    for (i = 0; i < 10u; i++) px(x + 6u + i, y - 35u + i);
+}
+
+void ui_note(uint32_t x, int32_t midi, uint32_t ticks) {
+    int32_t dia = ui_dia(midi);
+    uint32_t y = ui_y_of(dia);
+    uint32_t open = ticks >= 192u;           /* half and whole */
+    ledgers(x, dia);
+    head(x, y, open);
+    if (ticks < 384u) stem(x, y, dia);       /* whole notes: no stem */
+    if (ticks <= 48u) flag_up(x, y);         /* eighth and shorter */
+    if (ticks == 144u || ticks == 288u) {    /* augmentation dot */
+        px(x + 11u, y - 3u); px(x + 12u, y - 3u);
+        px(x + 11u, y - 2u); px(x + 12u, y - 2u);
+    }
+}
+
+void ui_rest(uint32_t x, uint32_t ticks) {
+    uint32_t ym = STAFF_TOP + 2u * STAFF_SPC; /* middle line */
+    if (ticks >= 384u) {                     /* whole: rect under 2nd line from top */
+        uint32_t y = STAFF_TOP + STAFF_SPC, i, j;
+        for (j = 0; j < 5u; j++) for (i = 0; i < 10u; i++) px(x - 5u + i, y + 1u + j);
+    } else if (ticks >= 192u) {              /* half: rect on middle line */
+        uint32_t i, j;
+        for (j = 0; j < 5u; j++) for (i = 0; i < 10u; i++) px(x - 5u + i, ym - 5u + j);
+    } else {                                 /* quarter: zigzag */
+        int32_t i;
+        for (i = -10; i <= 10; i++) {
+            uint32_t xx = (uint32_t)((int32_t)x + (i < 0 ? -i / 3 : i / 3));
+            px(xx, (uint32_t)((int32_t)ym + i));
+        }
+        px(x, ym - 12u); px(x + 1u, ym - 12u);
+    }
+}
+
+/* expand one buffer row to RGB565, byte-swapped for the LCD (like lcd_fill) */
+static void expand_row(uint32_t y, uint16_t *dst) {
+    uint32_t i, x;
+    uint8_t *r = pfb[y];
+    for (i = 0; i < 30u; i++) {
+        uint8_t b = r[i];
+        for (x = 0; x < 8u; x++) {
+            uint16_t v = (b & (0x80u >> x)) ? INK : PAPER;
+            dst[i * 8u + x] = (uint16_t)((v >> 8) | (v << 8));
+        }
+    }
+}
+
+void ui_blit(void) {
+    uint32_t y, s;
+    for (s = 0; s < 20u; s++) {               /* 20 strips of 12 rows */
+        for (y = 0; y < 12u; y++)
+            expand_row(s * 12u + y, strip + y * 240u);
+        lcd_blit(0, s * 12u, 240u, 12u, strip);
+    }
+}
+
+/* ---- overlays: drawn on the LCD after the blit (via the gfx canvas) ---- */
+static void overlay_text(uint32_t x, uint32_t y, const char *s,
+                         const felucca_font_t *f, uint32_t h) {
+    int32_t w = text_w(f, s);
+    if (w < 0) w = 0;
+    if (w > 232) w = 232;
+    cv_begin((uint32_t)w + 4u, h, PAPER);
+    cv_text(2, 0, f, s, INK);
+    cv_blit(x, y);
+}
+void ui_title(const char *s) {
+    overlay_text(8u, TITLE_Y, s, &FONT_S, 16u);
+}
+void ui_tally(const char *s) {
+    overlay_text(8u, TALLY_Y, s, &FONT_L, 32u);
+}
+void ui_indic(const char *s) {
+    overlay_text(196u, 218u, s, &FONT_S, 16u);
+}
+void ui_hint(const char *s) {
+    overlay_text(8u, 218u, s, &FONT_S, 16u);
+}
+void ui_cursor(uint32_t x) {
+    lcd_fill(x, STAFF_TOP - 10u, 2u, 5u * STAFF_SPC + 20u, CURSOR_C);
+}
+/* played-note notehead in color at the cursor */
+void ui_played(uint32_t x, int32_t midi, uint32_t color) {
+    int32_t dy, rx = 8, ry = 6;
+    uint32_t y = ui_y_of(ui_dia(midi));
+    for (dy = -ry; dy <= ry; dy++) {
+        int32_t q = (int32_t)ry * ry - dy * dy;
+        int32_t dxi = 0;
+        while ((dxi + 1) * (dxi + 1) * ry * ry <= q * rx * rx) dxi++;
+        if (dxi > 0) lcd_fill(x - (uint32_t)dxi, y + (uint32_t)dy, (uint32_t)(2 * dxi), 1u, (uint16_t)color);
+    }
+}
+

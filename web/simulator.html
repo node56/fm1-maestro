@@ -25,6 +25,8 @@ button.primary:hover{background:#356635}
 .lbl{color:#888;font-size:.8rem}
 #keys{position:relative;height:124px;width:min(880px,96vw);margin-top:18px;
       user-select:none;-webkit-user-select:none;touch-action:none}
+#staff{width:min(880px,96vw);height:auto;display:block;margin-top:14px;
+      background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px}
 .wkey{position:absolute;top:0;bottom:0;background:#f7f7f7;border:1px solid #999;
       border-radius:0 0 5px 5px;box-sizing:border-box;cursor:pointer}
 .bkey{position:absolute;top:0;height:60%;background:#1c1c1c;border:1px solid #000;
@@ -51,6 +53,8 @@ button.primary:hover{background:#356635}
     <div id="lessonMeta"></div>
     <div class="row" id="lessonBtns"></div>
     <div class="row"><span class="lbl">Drills:</span><span id="drillBtns"></span></div>
+    <div class="row"><span class="lbl">Read:</span><span id="readBtns"></span></div>
+    <div class="row"><label class="lbl"><input type="checkbox" id="namesChk" checked> note names on staff</label></div>
     <div class="row">
       <button id="metroBtn">Metronome: on</button>
       <button id="menuBtn">Menu</button>
@@ -61,6 +65,7 @@ button.primary:hover{background:#356635}
       against the play line.</div>
   </div>
 </div>
+<canvas id="staff" width="880" height="200"></canvas>
 <div id="keys"></div>
 <div id="toast"></div>
 <script>
@@ -80,8 +85,6 @@ var LESSON_TEXTS = [
 "# L05\ntitle:    Aura Lee\nkind:     melody\nsource:   G. R. Poulton (1861), traditional -- public domain\nlevel:    3\nhand:     right\nposition: C5\ntempo:    92\ntime:     4/4\nnotes:\nC5 q | D5 q | E5 q | F5 q |\nG5 h | G5 h |\nA5 q | G5 q | F5 q | E5 q |\nD5 h | D5 h |\nC5 q | D5 q | E5 q | F5 q |\nE5 h | D5 h |\nC5 h | R h |"
 ];
 </script>
-</body>
-</html>
 <script>
 'use strict';
 /* ---------------- lesson format parser (mirrors lesson.c) ----------- */
@@ -261,7 +264,8 @@ function noteOn(midi){
   pressed[midi]=1;
   var d=keyDiv(midi); if(d) d.classList.add('lit');
   tone(midi,220,'triangle',0.16);
-  practiceKey(midi);
+  if(screen==='practice') practiceKey(midi);
+  else if(screen==='noteread') noteReadKey(midi);
 }
 function noteOff(midi){
   if(!pressed[midi]) return;
@@ -271,7 +275,7 @@ function noteOff(midi){
 var KEYMAP={a:60,w:61,s:62,e:63,d:64,f:65,t:66,g:67,y:68,h:69,u:70,j:71,k:72,
             o:73,l:74,p:75,';':76,"'":77};
 window.addEventListener('keydown',function(e){
-  if(e.repeat||screen!=='practice') return;
+  if(e.repeat||(screen!=='practice'&&screen!=='noteread')) return;
   var m=KEYMAP[e.key.toLowerCase()];
   if(m!==undefined){ e.preventDefault(); ac(); noteOn(m); }
 });
@@ -456,7 +460,9 @@ function loop(t){
   requestAnimationFrame(loop);
   if(!lastT) lastT=t;
   var dt=Math.min(100,t-lastT); lastT=t;
-  if(screen==='menu'){ drawMenu(); return; }
+  if(screen==='menu'){ drawMenu(); drawStaffIdle(); return; }
+  if(screen==='noteread'){ if(NR&&NR.flash>0)NR.flash--; drawNoteRead(); return; }
+  if(screen==='results'){ return; }
   if(screen!=='practice'||!P||P.done) return;
   P.nowTick+=dt*P.lesson.tempo*TPQ/60000;
   if(P.hitFlash>0)P.hitFlash--;
@@ -469,8 +475,212 @@ function loop(t){
   }
   skipRests();
   drawPractice();
+  drawStaffStrip();
   if(P.idx>=P.lesson.events.length) endPractice();
 }
 updateSide();
 requestAnimationFrame(loop);
 </script>
+<script>
+'use strict';
+/* ---------------- staff notation: learn to read music ------------------ */
+/* Treble staff. Reference: E5 (MIDI 64) = bottom line. Our convention is
+ * C5 == MIDI 60, so in our note names the treble lines bottom-up are
+ * E5 G5 B5 D6 F6. All lesson/drill notes are naturals. */
+var staffC=document.getElementById('staff'), sg=staffC.getContext('2d');
+var LETTER_IDX={C:0,D:1,E:2,F:3,G:4,A:5,B:6};
+var NOTE_LETTERS=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+function dia(midi){ return Math.floor(midi/12)*7+LETTER_IDX[NOTE_LETTERS[midi%12][0]]; }
+var DIA_E5=dia(64); /* 37 */
+function staffY(midi,yBottom,s){ return yBottom-(dia(midi)-DIA_E5)*s/2; }
+function isWhite(midi){ return [1,3,6,8,10].indexOf(midi%12)<0; }
+function isDotted(t){ return t===36||t===72||t===144||t===288||t===576; }
+function isOpenHead(t){ return t>=192; } /* half note and longer */
+var SHOW_NAMES=true;
+
+/* stylized treble clef: spiral around the G line + vertical stroke */
+function drawClef(g,x,yTop,s){
+  g.strokeStyle='#ddd'; g.lineWidth=Math.max(2,s*0.18); g.lineCap='round';
+  var gy=yTop+3*s;
+  g.beginPath(); g.arc(x,gy,s*0.8,-Math.PI*0.35,Math.PI*1.3); g.stroke();
+  g.beginPath();
+  g.moveTo(x+s*0.5,yTop-1.7*s);
+  g.bezierCurveTo(x-s*0.5,yTop-0.6*s, x+s*0.35,yTop+1.6*s, x-s*0.1,yTop+3.4*s);
+  g.bezierCurveTo(x-s*0.45,yTop+4.6*s, x-s*0.95,yTop+4.9*s, x-s*0.9,yTop+4.15*s);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(x+s*0.5,yTop-1.7*s);
+  g.bezierCurveTo(x+s*0.95,yTop-1.05*s, x+s*0.5,yTop-0.35*s, x+s*0.02,yTop-0.5*s);
+  g.stroke();
+}
+function ledgers(g,x,midi,yBottom,s){
+  var d=dia(midi), w=s*1.2, dd, ly;
+  if(d>=37&&d<=45) return;
+  g.strokeStyle='#888'; g.lineWidth=Math.max(1.5,s*0.1);
+  g.beginPath();
+  if(d<37){ for(dd=35;dd>=d;dd-=2){ ly=yBottom-(dd-DIA_E5)*s/2; g.moveTo(x-w,ly); g.lineTo(x+w,ly); } }
+  else{ for(dd=47;dd<=d;dd+=2){ ly=yBottom-(dd-DIA_E5)*s/2; g.moveTo(x-w,ly); g.lineTo(x+w,ly); } }
+  g.stroke();
+}
+function noteHead(g,x,y,rx,open,color){
+  g.beginPath(); g.ellipse(x,y,rx,rx*0.72,-0.35,0,Math.PI*2);
+  if(open){ g.strokeStyle=color; g.lineWidth=Math.max(2,rx*0.3); g.stroke(); }
+  else{ g.fillStyle=color; g.fill(); }
+}
+function stem(g,x,y,rx,s,up,color){
+  var len=s*3.1, sx=x+(up?rx-1:-(rx-1));
+  g.strokeStyle=color; g.lineWidth=Math.max(2,s*0.12); g.lineCap='round';
+  g.beginPath(); g.moveTo(sx,y); g.lineTo(sx,y+(up?-len:len)); g.stroke();
+}
+function restMark(g,x,y,s,color){
+  g.strokeStyle=color; g.lineWidth=Math.max(2,s*0.12); g.lineCap='round';
+  g.beginPath();
+  g.moveTo(x-s*0.25,y-s*0.9);
+  g.lineTo(x+s*0.3,y-s*0.35);
+  g.lineTo(x-s*0.3,y+s*0.1);
+  g.bezierCurveTo(x+s*0.35,y+s*0.35, x+s*0.2,y+s*0.8, x-s*0.15,y+s*0.95);
+  g.stroke();
+  g.beginPath(); g.arc(x+s*0.02,y-s*1.02,s*0.11,0,Math.PI*2);
+  g.fillStyle=color; g.fill();
+}
+function dotMark(g,x,y,rx,s,color){
+  g.beginPath(); g.arc(x+rx+s*0.45,y,s*0.14,0,Math.PI*2);
+  g.fillStyle=color; g.fill();
+}
+
+/* staff strip under the firmware screen during practice: the lesson's
+ * upcoming notes as notation, current note highlighted */
+function drawStaffStrip(){
+  var g=sg, W=880, H=200, i;
+  g.clearRect(0,0,W,H);
+  var s=16, yTop=46, yBottom=yTop+4*s;
+  g.strokeStyle='#4a4a4a'; g.lineWidth=2; g.beginPath();
+  for(i=0;i<5;i++){ g.moveTo(64,yTop+i*s); g.lineTo(W-16,yTop+i*s); }
+  g.stroke();
+  drawClef(g,78,yTop,s);
+  if(!P) return;
+  var x0=100, dx=60, maxN=12, evs=[], k=P.idx;
+  while(evs.length<maxN&&k<P.lesson.events.length){ evs.push({e:P.lesson.events[k],idx:k}); k++; }
+  for(i=0;i<evs.length;i++){
+    (function(it,i){
+      var e=it.e, x=x0+i*dx;
+      var col=it.idx<P.idx?'#555':(it.idx===P.idx?'#fc3':'#7fb3d5');
+      if(e.rest){ restMark(g,x,yTop+2*s,s,col); return; }
+      var y=staffY(e.midi,yBottom,s), rx=it.idx===P.idx?10.5:9;
+      ledgers(g,x,e.midi,yBottom,s);
+      noteHead(g,x,y,rx,isOpenHead(e.ticks),col);
+      stem(g,x,y,rx,s,dia(e.midi)<41,col);
+      if(isDotted(e.ticks)) dotMark(g,x,y,rx,s,col);
+      if(SHOW_NAMES){
+        g.fillStyle=col; g.font='13px system-ui'; g.textAlign='center';
+        g.fillText(NOTE_LETTERS[e.midi%12][0],x,yBottom+40);
+        g.textAlign='left';
+      }
+    })(evs[i],i);
+  }
+}
+function drawStaffIdle(){
+  var g=sg, s=16, yTop=46, i;
+  g.clearRect(0,0,880,200);
+  g.strokeStyle='#333'; g.lineWidth=2; g.beginPath();
+  for(i=0;i<5;i++){ g.moveTo(64,yTop+i*s); g.lineTo(864,yTop+i*s); }
+  g.stroke();
+  drawClef(g,78,yTop,s);
+  g.fillStyle='#555'; g.font='14px system-ui'; g.textAlign='center';
+  g.fillText('Your music appears here as notation — pick a lesson or a drill.',440,168);
+  g.textAlign='left';
+}
+
+/* ---------------- note-reading drill ---------------------------------- */
+/* Flashcard mode: one note on the staff, find it on the keyboard.
+ * First keypress counts; a miss reveals the note name, then moves on. */
+var NR=null;
+var READ_LO=[60,60,55], READ_HI=[67,69,72];
+var READ_NAMES=[['C5','G5'],['C5','A5'],['G4','C6']];
+function startNoteRead(lv){
+  ac();
+  NR={lv:lv,q:0,total:12,cur:0,prev:-1,hits:0,streak:0,best:0,
+      lock:false,flash:0,flashOk:false,msg:null,done:false};
+  keyDivs.forEach(function(d){d.classList.remove('exp');});
+  screen='noteread';
+  pickReadNote();
+  lessonTitleEl.textContent='Note reading L'+lv;
+  lessonMetaEl.textContent='Find '+READ_NAMES[lv][0]+'–'+READ_NAMES[lv][1]+
+    ' on the keyboard · '+NR.total+' questions · first try counts';
+}
+function pickReadNote(){
+  var lo=READ_LO[NR.lv], hi=READ_HI[NR.lv], m, guard=0;
+  do{ m=lo+Math.floor(Math.random()*(hi-lo+1)); guard++; }
+  while((!isWhite(m)||m===NR.prev)&&guard<300);
+  NR.prev=NR.cur; NR.cur=m; NR.msg=null;
+}
+function noteReadKey(midi){
+  if(!NR||NR.done||NR.lock||screen!=='noteread') return;
+  NR.lock=true;
+  var ok=(midi===NR.cur);
+  if(ok){
+    NR.hits++; NR.streak++; if(NR.streak>NR.best)NR.best=NR.streak;
+    NR.flash=12; NR.flashOk=true; NR.msg={t:noteName(midi)+' ✓',c:'#0f0'}; sndHit();
+  }else{
+    NR.streak=0; NR.flash=12; NR.flashOk=false;
+    NR.msg={t:'That was '+noteName(NR.cur),c:'#f66'}; sndMiss();
+  }
+  setTimeout(function(){
+    if(!NR||NR.done) return;
+    NR.q++; NR.lock=false;
+    if(NR.q>=NR.total) endNoteRead(); else pickReadNote();
+  }, ok?500:1300);
+}
+function endNoteRead(){
+  NR.done=true;
+  G.score=Math.round(NR.hits/NR.total*10000); G.hit=NR.hits; G.total=NR.total;
+  G.best=NR.best; G.streak=NR.best;
+  var id='read'+NR.lv, s=stars(), prev=best(id);
+  var isBest=!prev||G.score>prev.score;
+  if(isBest) saveBest(id,{score:G.score,stars:s,streak:NR.best});
+  P={lesson:{title:'Note reading L'+NR.lv},id:id,done:true};
+  keyDivs.forEach(function(d){d.classList.remove('exp');});
+  sg.clearRect(0,0,880,200);
+  screen='results';
+  updateSide(); drawResults(s,isBest);
+}
+function drawNoteRead(){
+  var g=sg, W=880, H=200;
+  g.clearRect(0,0,W,H);
+  var s=22, yTop=30, yBottom=yTop+4*s, cx=W/2, i;
+  g.strokeStyle='#4a4a4a'; g.lineWidth=2; g.beginPath();
+  for(i=0;i<5;i++){ g.moveTo(200,yTop+i*s); g.lineTo(W-200,yTop+i*s); }
+  g.stroke();
+  drawClef(g,232,yTop,s);
+  if(!NR) return;
+  var y=staffY(NR.cur,yBottom,s);
+  var col=NR.flash>0?(NR.flashOk?'#0f0':'#f00'):'#fff';
+  ledgers(g,cx,NR.cur,yBottom,s);
+  noteHead(g,cx,y,17,false,col);
+  stem(g,cx,y,17,s,dia(NR.cur)<41,col);
+  g.textAlign='center';
+  if(NR.msg){ g.fillStyle=NR.msg.c; g.font='bold 20px system-ui'; g.fillText(NR.msg.t,cx,H-16); }
+  else{
+    g.fillStyle='#999'; g.font='15px system-ui';
+    g.fillText('What note is this? Press the key — first try counts.',cx,H-16);
+  }
+  g.fillStyle='#777'; g.font='14px system-ui';
+  g.fillText('Question '+(NR.q+1)+' of '+NR.total+'   ·   '+NR.hits+' correct',cx,22);
+  g.textAlign='left';
+  if(NR.flash>0){ g.strokeStyle=NR.flashOk?'#0f0':'#f00'; g.lineWidth=5; g.strokeRect(4,4,W-8,H-8); }
+}
+(function buildReadBtns(){
+  var rb=document.getElementById('readBtns');
+  for(var l=0;l<3;l++){
+    (function(lv){
+      var b=document.createElement('button');
+      b.textContent='L'+lv; b.title='Note reading: '+READ_NAMES[lv][0]+'–'+READ_NAMES[lv][1];
+      b.onclick=function(){ startNoteRead(lv); };
+      rb.appendChild(b);
+    })(l);
+  }
+  document.getElementById('namesChk').onchange=function(){ SHOW_NAMES=this.checked; };
+})();
+</script>
+</body>
+</html>
