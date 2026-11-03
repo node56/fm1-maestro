@@ -1,0 +1,18 @@
+# L04 — a folk round; introduces half notes and a longer phrase.
+title:    Lightly Row
+kind:     melody
+source:   German folk song, traditional — public domain
+level:    2
+hand:     right
+position: C5
+tempo:    100
+time:     4/4
+notes:
+E5 q | D5 q | C5 q | D5 q |
+E5 q | E5 q | E5 h |
+D5 q | D5 q | D5 h |
+E5 q | G5 q | G5 h |
+E5 q | D5 q | C5 q | D5 q |
+E5 q | E5 q | E5 q | E5 q |
+D5 q | D5 q | E5 q | D5 q |
+C5 h | R h |

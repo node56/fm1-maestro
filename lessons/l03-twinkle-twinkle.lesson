@@ -1,0 +1,15 @@
+# L03 — reaches up to A (finger 5 stretches one key past G;
+# the UI highlights the stretch). First phrase only.
+title:    Twinkle, Twinkle, Little Star
+kind:     melody
+source:   French traditional melody, 18th century — public domain
+level:    2
+hand:     right
+position: C5
+tempo:    96
+time:     4/4
+notes:
+C5 q | C5 q | G5 q | G5 q |
+A5 q | A5 q | G5 h |
+F5 q | F5 q | E5 q | E5 q |
+D5 q | D5 q | C5 h |

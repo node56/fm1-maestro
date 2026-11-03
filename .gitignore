@@ -1,0 +1,9 @@
+build/
+builds/
+*.o
+*.wav
+__pycache__/
+.DS_Store
+# firmware packages are ignored, except the ones hosted for the web installer
+*.fwsc
+!docs/fw/*.fwsc

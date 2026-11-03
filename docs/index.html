@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maestro — install on your FM-1</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { background: #0b0e14; color: #e6e9f0; font: 15px/1.55 system-ui, sans-serif;
+         margin: 0; padding: 24px 16px 64px; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h1 .sub { color: #8b93a7; font-weight: 400; font-size: 16px; display: block; margin-top: 4px; }
+  .badge { display: inline-block; background: #1c2333; border: 1px solid #2e3a52; color: #9fd0ff;
+           border-radius: 999px; padding: 2px 12px; font-size: 13px; margin: 8px 8px 0 0; }
+  .card { background: #111623; border: 1px solid #232c42; border-radius: 12px;
+          padding: 20px; margin: 20px 0; }
+  .card h2 { margin: 0 0 12px; font-size: 18px; }
+  .status { padding: 10px 14px; border-radius: 8px; background: #161d2e; border: 1px solid #2a3550;
+            margin: 12px 0; min-height: 20px; }
+  .status.ok { border-color: #2e7d4f; background: #10241a; }
+  .status.err { border-color: #a03a3a; background: #2a1414; }
+  .status.warn { border-color: #a07a2e; background: #2a2110; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+  button { background: #2b6cb0; color: #fff; border: 0; border-radius: 8px;
+           padding: 10px 18px; font-size: 15px; cursor: pointer; }
+  button:hover:not(:disabled) { background: #3580cc; }
+  button:disabled { background: #232c42; color: #6b7590; cursor: default; }
+  button.secondary { background: #1c2333; border: 1px solid #2e3a52; }
+  button.secondary:hover:not(:disabled) { background: #242e45; }
+  #barWrap { display: none; background: #161d2e; border-radius: 8px; height: 26px;
+             margin: 12px 0; position: relative; overflow: hidden; }
+  #bar { height: 100%; width: 0; background: linear-gradient(90deg, #2b6cb0, #4299e1);
+         transition: width .2s; }
+  #barLabel { position: absolute; inset: 0; display: flex; align-items: center;
+              justify-content: center; font-size: 13px; color: #dbe4f5; }
+  #log { background: #0a0d13; border: 1px solid #1d2438; border-radius: 8px;
+         padding: 12px; height: 180px; overflow-y: auto; font: 12.5px/1.5 ui-monospace, monospace;
+         white-space: pre-wrap; margin: 12px 0 0; }
+  .info { margin: 8px 0; }
+  .dim { color: #8b93a7; }
+  .warn { color: #e8b93e; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code { background: #1c2333; padding: 1px 6px; border-radius: 4px; font-size: 13.5px; }
+  footer { color: #6b7590; font-size: 13px; margin-top: 32px; }
+  footer a { color: #9fd0ff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Maestro <span class="sub">Duolingo-style music lessons on the M-VAVE FM-1. No phone needed.</span></h1>
+  <span class="badge">v0 test build</span>
+  <span class="badge">open source · GPL-3.0</span>
+
+  <div class="card">
+    <h2>Install from your browser</h2>
+    <ul>
+      <li>Use <b>Chrome or Edge</b> on desktop (WebMIDI with SysEx is required).</li>
+      <li>Connect the FM-1 with a <b>USB data cable</b> and close any other app using MIDI.</li>
+      <li>Your browser will ask for MIDI access — approve it.</li>
+    </ul>
+    <div id="status" class="status">…</div>
+    <div class="row">
+      <button id="btnConnect">Connect FM-1</button>
+      <button id="btnInstall" disabled>Install Maestro</button>
+      <button id="btnResume" disabled class="secondary">Resume interrupted update</button>
+      <button id="btnDisconnect" disabled class="secondary">Disconnect</button>
+    </div>
+    <div class="info" id="deviceInfo"><span class="dim">Not connected.</span></div>
+    <div class="info" id="packageInfo"><span class="dim">Firmware package not loaded yet.</span></div>
+    <div id="barWrap"><div id="bar"></div><div id="barLabel"></div></div>
+    <div id="log"></div>
+  </div>
+
+  <div class="card">
+    <h2>Good to know</h2>
+    <ul>
+      <li>This is a <b>test build</b> (device identity <code>FM-1_990</code>). It installs like any firmware and you can go back to stock anytime with M-VAVE's M-UPGRADE or the Firmware Hub.</li>
+      <li><b>Do not unplug</b> while it is writing.</li>
+      <li>If the screen ever shows a crash report, the device restarts itself — that report is useful, send it our way.</li>
+      <li>Two failed boots in a row drop the FM-1 into USB rescue by itself; you can also hold <code>OCT-</code> while switching on.</li>
+      <li>If an install is interrupted, reconnect and use <b>Resume interrupted update</b> — the device stays in update mode until it finishes.</li>
+    </ul>
+  </div>
+
+  <footer>
+    Maestro is built on the <a href="https://github.com/zvenson/dinghy">Dinghy</a> template over
+    <a href="https://github.com/hugelton/Felucca">Felucca</a>.
+    The browser update protocol (<code>vendor/fm1ota.js</code>) and package tools
+    (<code>vendor/fm1pkg.js</code>) are by Leo Kuroshita / Hügelton Instruments, GPL-3.0,
+    vendored verbatim. Maestro itself is GPL-3.0.
+  </footer>
+</main>
+<script type="module" src="installer.js"></script>
+</body>
+</html>

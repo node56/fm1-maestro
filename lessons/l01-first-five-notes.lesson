@@ -1,0 +1,15 @@
+# L01 — the very first lesson. Find the five notes under your
+# right hand (fingers 1-5 on C-D-E-F-G) and play them in time.
+title:    First Five Notes
+kind:     melody
+source:   Original exercise — no rights reserved beyond this repo's license
+level:    0
+hand:     right
+position: C5
+tempo:    72
+time:     4/4
+notes:
+C5 q | D5 q | E5 q | F5 q |
+G5 q | F5 q | E5 q | D5 q |
+C5 q | D5 q | E5 q | D5 q |
+C5 h | R h |

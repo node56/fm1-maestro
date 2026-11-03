@@ -1,0 +1,15 @@
+# L02 — the most famous four bars in beginner repertoire.
+# Stays in C position throughout.
+title:    Ode to Joy
+kind:     melody
+source:   L. v. Beethoven, Symphony No. 9, Op. 125 (1824) — public domain
+level:    2
+hand:     right
+position: C5
+tempo:    96
+time:     4/4
+notes:
+E5 q | E5 q | F5 q | G5 q |
+G5 q | F5 q | E5 q | D5 q |
+C5 q | C5 q | D5 q | E5 q |
+E5 q. | D5 e | C5 h |
