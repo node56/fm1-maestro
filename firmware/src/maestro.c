@@ -159,7 +159,7 @@ static uint32_t last_frame_ms;
 
 /* recording: what you played (ms, midi, on/off) */
 #define MAXREC 512
-static struct { uint32_t ms; uint8_t midi; uint8_t on; } rec[MAXREC];
+static struct { uint32_t ms; uint16_t x; uint8_t midi; uint8_t on; } rec[MAXREC];
 static uint16_t rec_n;
 static uint16_t pb_idx;          /* next rec event during playback */
 static uint8_t rec_on;           /* record live key events */
@@ -181,6 +181,7 @@ static uint32_t last_scroll;
 static void rec_event(uint8_t midi, uint8_t on) {
     if (!rec_on || rec_n >= MAXREC) return;
     rec[rec_n].ms = play_ms;
+    rec[rec_n].x = (uint16_t)(last_scroll + cursor_x());  /* absolute piece-x */
     rec[rec_n].midi = midi;
     rec[rec_n].on = on;
     rec_n++;
@@ -192,17 +193,17 @@ static void draw_played(uint8_t midi) {
     ui_note(cursor_x(), midi, 96u);
 }
 
-/* recorded black notes, drawn as notation scrolling in (not popping in) */
+/* recorded black notes, drawn as notation scrolling in (not popping in).
+   x was stored at record time (absolute piece-x), so alignment is exact. */
 static void draw_rec_cols(uint32_t sc, uint32_t dx) {
     uint32_t x0 = dx >= 240u ? 0u : 240u - dx;
     uint16_t i, j;
     ui_plane_black();
     for (i = 0; i < rec_n; i++) {
-        uint32_t x, sx, ticks = 96u;
+        uint32_t sx, ticks = 96u;
         if (!rec[i].on) continue;
-        x = 240u + CLEF_W + (rec[i].ms * tempo * PXQ) / 60000u;
-        if (x < sc) continue;
-        sx = x - sc;
+        if (rec[i].x < sc) continue;
+        sx = rec[i].x - sc;
         if (sx >= 240u || sx + 48u < x0) continue;
         /* duration from the matching note-off */
         for (j = i + 1u; j < rec_n; j++) {
@@ -291,14 +292,15 @@ static void render_book(void) {
     ui_cursor_mark(cursor_x());
 }
 
+/* staff is already set up (HOME/BOOK). Just wipe the planes and redraw the
+   bare staff+clef (no flash, no scrolling clef). Notes scroll in via play_frame. */
 static void show_start(const char *title) {
-    ui_paper();
     ui_title(title);
     ui_clear();
     ui_plane_black();
     ui_staff_cols(0u, 240u);
-    ui_clef(30u);  /* clef at the left, like the book */
-    draw_new_cols(0u, 240u);
+    ui_clef(30u);
+    if (rec_n > 0) draw_rec_cols(0u, 240u);  /* black notes already on-screen */
     ui_blit();
     ui_cursor_mark(cursor_x());
 }
