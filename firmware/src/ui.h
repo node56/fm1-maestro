@@ -7,8 +7,9 @@
  * data, then the planes are composited to RGB565 and blitted. No full-screen
  * clear per frame, no flicker.
  *
- * Planes: ink (notation), ok (notes you played correctly, green),
- * bad (notes you played wrong, red). Played notes scroll with the music.
+ * Planes: black (staff, clef, bars, and the notes YOU play),
+ * blue (the suggested notes, if a piece is loaded).
+ * What you play is black; what the piece suggests is blue.
  */
 #ifndef MAESTRO_UI_H
 #define MAESTRO_UI_H
@@ -19,7 +20,6 @@
 #define STAFF_SPC 14u        /* line spacing */
 #define STAFF_BOT 150u       /* E5, bottom line */
 #define TITLE_Y 10u
-#define TALLY_Y 208u
 
 /* the scroll region: only this band moves; title/cursor/text are static */
 #define SCROLL_TOP 72u
@@ -30,8 +30,10 @@ void ui_paper(void);                       /* full screen to paper, once */
 void ui_clear(void);                       /* wipe all planes */
 void ui_scroll_px(uint32_t dx);            /* shift all planes left by dx px */
 void ui_staff_cols(uint32_t x0, uint32_t x1); /* draw staff lines for columns [x0,x1) */
+void ui_plane_black(void);                 /* draw in black (staff, your notes) */
+void ui_plane_blue(void);                  /* draw in blue (suggested notes) */
 
-/* notation, drawn at absolute buffer x. y follows the staff. */
+/* notation, drawn at absolute buffer x into the selected plane. */
 int32_t ui_dia(int32_t midi);              /* diatonic steps, E5 == 37 */
 uint32_t ui_y_of(int32_t dia);             /* buffer y for a diatonic step */
 void ui_note(uint32_t x, int32_t midi, uint32_t ticks);
@@ -39,22 +41,17 @@ void ui_rest(uint32_t x, uint32_t ticks);
 void ui_bar(uint32_t x);                   /* bar line across the staff */
 void ui_clef(uint32_t x);                  /* treble clef at the start */
 
-/* your played note, drawn into the ok/bad plane so it scrolls with the music */
-void ui_played_scroll(uint32_t x, int32_t midi, uint8_t ok);
-
 /* push the planes to the LCD (composited) */
 void ui_blit(void);
 
 /* text / cursor, drawn on the LCD after the blit */
 void ui_title(const char *s);
-void ui_tally(const char *s);
 void ui_indic(const char *s);
 void ui_hint(const char *s);
 void ui_cursor_mark(uint32_t x);           /* amber playhead below the staff */
 
-#define UI_HIT_C 0x07E0u   /* green */
-#define UI_MISS_C 0xF800u  /* red */
 #define UI_PAPER 0xF7BCu   /* warm paper */
-#define UI_INK 0x0000u
+#define UI_INK 0x0000u     /* black: staff and your notes */
+#define UI_BLUE 0x001Fu    /* blue: suggested notes */
 
 #endif

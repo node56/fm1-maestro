@@ -14,11 +14,11 @@ static uint32_t mset_crc32(const uint8_t *p, uint32_t n) {
 }
 
 void mset_load(settings_t *s) {
-    uint8_t i;
-    s->magic = 0;
+        s->magic = 0;
     s->cursor_x = 60;
     s->speed_idx = 2;
-    for (i = 0; i < NSTARS; i++) { s->stars[i] = 0; s->best_pct[i] = 0; }
+    s->level = 2;
+    s->sel = 0;
     {
         uint8_t buf[sizeof(settings_t) + 4];
         if (blob_load(0u, buf, sizeof buf) < 0) return;
@@ -34,6 +34,8 @@ void mset_load(settings_t *s) {
             *s = tmp;
             if (s->cursor_x < 30u || s->cursor_x > 180u) s->cursor_x = 60;
             if (s->speed_idx > 4u) s->speed_idx = 2;
+            if (s->level > 5u) s->level = 2;
+            if (s->sel > 6u) s->sel = 0;
         }
     }
 }

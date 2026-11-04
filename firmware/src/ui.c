@@ -6,14 +6,15 @@
 #define PAPER UI_PAPER
 #define INK UI_INK
 #define CURSOR_C 0xFCE0u /* amber */
-#define HIT_C UI_HIT_C   /* green */
-#define MISS_C UI_MISS_C /* red */
+#define BLUE UI_BLUE      /* suggested notes */
 
 #define PLANE_W 30u      /* bytes per row */
-static uint8_t pfb[SCROLL_H * PLANE_W];      /* ink: the notation */
-static uint8_t ok_pfb[SCROLL_H * PLANE_W];   /* your correct notes (green) */
-static uint8_t bad_pfb[SCROLL_H * PLANE_W];  /* your wrong notes (red) */
-static uint8_t *cur_fb = pfb;                /* drawing target plane */
+static uint8_t blk_pfb[SCROLL_H * PLANE_W];  /* black: staff, clef, bars, your notes */
+static uint8_t blu_pfb[SCROLL_H * PLANE_W];  /* blue: suggested notes */
+static uint8_t *cur_fb = blk_pfb;            /* drawing target plane */
+
+void ui_plane_black(void) { cur_fb = blk_pfb; }
+void ui_plane_blue(void) { cur_fb = blu_pfb; }
 
 static uint16_t strip[240 * 12];             /* blit staging, 12 rows */
 
@@ -40,14 +41,14 @@ static void vline(uint32_t x, uint32_t y0, uint32_t y1) {
 void ui_clear(void) {
     uint32_t i;
     for (i = 0; i < (uint32_t)SCROLL_H * PLANE_W; i++)
-        pfb[i] = ok_pfb[i] = bad_pfb[i] = 0;
+        blk_pfb[i] = blu_pfb[i] = 0;
 }
 
 /* shift all planes left by dx pixels (dx < 240) */
 void ui_scroll_px(uint32_t dx) {
     uint32_t y, i, p;
-    uint8_t *planes[3] = { pfb, ok_pfb, bad_pfb };
-    for (p = 0; p < 3u; p++) {
+    uint8_t *planes[2] = { blk_pfb, blu_pfb };
+    for (p = 0; p < 2u; p++) {
         uint8_t *fb = planes[p];
         uint32_t d = dx;
         while (d >= 8u) {
@@ -143,8 +144,6 @@ void ui_note(uint32_t x, int32_t midi, uint32_t ticks) {
     int32_t dia = ui_dia(midi);
     uint32_t y = ui_y_of(dia);
     uint32_t open = ticks >= 192u;
-    uint8_t *save = cur_fb;
-    cur_fb = pfb;
     ledgers(x, dia);
     head(x, y, open);
     if (ticks < 384u) stem(x, y, dia);
@@ -153,13 +152,10 @@ void ui_note(uint32_t x, int32_t midi, uint32_t ticks) {
         px(x + 11u, y - 3u); px(x + 12u, y - 3u);
         px(x + 11u, y - 2u); px(x + 12u, y - 2u);
     }
-    cur_fb = save;
 }
 
 void ui_rest(uint32_t x, uint32_t ticks) {
     uint32_t ym = STAFF_TOP + 2u * STAFF_SPC;
-    uint8_t *save = cur_fb;
-    cur_fb = pfb;
     if (ticks >= 384u) {
         uint32_t y = STAFF_TOP + STAFF_SPC, i, j;
         for (j = 0; j < 5u; j++) for (i = 0; i < 10u; i++) px(x - 5u + i, y + 1u + j);
@@ -174,20 +170,14 @@ void ui_rest(uint32_t x, uint32_t ticks) {
         }
         px(x, ym - 12u); px(x + 1u, ym - 12u);
     }
-    cur_fb = save;
 }
 
 void ui_bar(uint32_t x) {
-    uint8_t *save = cur_fb;
-    cur_fb = pfb;
     vline(x, STAFF_TOP, STAFF_BOT);
-    cur_fb = save;
 }
 
 /* treble clef, stylized for 1-bit. G line (2nd from bottom) is y=136. */
 void ui_clef(uint32_t x) {
-    uint8_t *save = cur_fb;
-    cur_fb = pfb;
     vline(x, 84u, 200u);                 /* main stroke */
     ellipse_o(x, 142u, 11u, 14u);        /* belly around the G line */
     ellipse_o(x, 112u, 6u, 8u);          /* upper loop */
@@ -195,29 +185,18 @@ void ui_clef(uint32_t x) {
     px(x - 4u, 83u); px(x - 5u, 84u);    /* top hook */
     px(x - 1u, 201u); px(x - 2u, 202u); px(x - 3u, 203u);
     px(x - 4u, 203u); px(x - 5u, 202u); px(x - 6u, 200u); /* tail */
-    cur_fb = save;
 }
 
-/* your played note, into the ok/bad plane so it scrolls with the music */
-void ui_played_scroll(uint32_t x, int32_t midi, uint8_t ok) {
-    uint8_t *save = cur_fb;
-    uint32_t y = ui_y_of(ui_dia(midi));
-    cur_fb = ok ? ok_pfb : bad_pfb;
-    head(x, y, 0);
-    cur_fb = save;
-}
-
-/* composite one region row: bad > ok > ink > paper, byte-swapped for the LCD */
+/* composite one region row: blue (suggested) > black (staff, your notes) > paper */
 static void expand_row(uint32_t y, uint16_t *dst) {
     uint32_t i, x;
-    uint8_t *r0 = pfb + y * PLANE_W;
-    uint8_t *r1 = ok_pfb + y * PLANE_W;
-    uint8_t *r2 = bad_pfb + y * PLANE_W;
+    uint8_t *rb = blk_pfb + y * PLANE_W;
+    uint8_t *ru = blu_pfb + y * PLANE_W;
     for (i = 0; i < PLANE_W; i++) {
-        uint8_t b0 = r0[i], b1 = r1[i], b2 = r2[i];
+        uint8_t bb = rb[i], bu = ru[i];
         for (x = 0; x < 8u; x++) {
             uint8_t m = (uint8_t)(0x80u >> x);
-            uint16_t v = (b2 & m) ? MISS_C : (b1 & m) ? HIT_C : (b0 & m) ? INK : PAPER;
+            uint16_t v = (bu & m) ? BLUE : (bb & m) ? INK : PAPER;
             dst[i * 8u + x] = (uint16_t)((v >> 8) | (v << 8));
         }
     }
@@ -244,9 +223,6 @@ static void overlay_text(uint32_t x, uint32_t y, const char *s,
 }
 void ui_title(const char *s) {
     overlay_text(8u, TITLE_Y, s, &FONT_S, 16u);
-}
-void ui_tally(const char *s) {
-    overlay_text(8u, TALLY_Y, s, &FONT_L, 32u);
 }
 void ui_indic(const char *s) {
     overlay_text(196u, 224u, s, &FONT_S, 16u);
