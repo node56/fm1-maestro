@@ -27,6 +27,15 @@ years, or genuinely traditional). Each file cites its source. No
 copyrighted method-book material is included — by design, so this
 firmware can be freely shared and listed.
 
+## Piano samples
+
+`firmware/src/piano_data.c` contains 9 piano notes from the **Salamander
+Grand Piano V3** by Alexander Holm, a Yamaha C5 grand sampled in minor
+thirds, used under **CC-BY 3.0**
+(https://creativecommons.org/licenses/by/3.0/). The samples were
+downmixed to mono, resampled to 22050 Hz, trimmed, normalized, and given
+crossfaded sustain loops for this project. Thank you, Alexander.
+
 ## Trademarks
 
 M-VAVE and FM-1 are trademarks of their respective owners. This

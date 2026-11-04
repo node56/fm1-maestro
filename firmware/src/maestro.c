@@ -9,47 +9,27 @@
  */
 
 /* ---- piano voice: one wavetable cycle (sine + 2nd + 3rd harmonic) ---- */
-static const int16_t WT[256] = {
-0,1263,2523,3777,5021,6251,7466,8662,9836,10985,12106,13197,
-14255,15277,16262,17207,18110,18969,19783,20550,21269,21939,22558,23126,
-23643,24108,24520,24880,25189,25445,25651,25806,25912,25969,25979,25943,
-25863,25739,25575,25372,25131,24855,24546,24207,23838,23444,23026,22586,
-22127,21652,21162,20661,20149,19631,19108,18582,18055,17529,17007,16491,
-15981,15480,14989,14509,14043,13591,13153,12732,12328,11941,11572,11221,
-10889,10576,10281,10005,9747,9507,9284,9078,8887,8713,8552,8405,
-8270,8147,8033,7929,7832,7742,7657,7577,7498,7422,7345,7268,
-7188,7105,7017,6924,6825,6718,6602,6478,6344,6200,6045,5879,
-5701,5511,5309,5096,4870,4633,4384,4124,3853,3571,3280,2980,
-2671,2354,2031,1702,1368,1029,688,344,0,-344,-688,-1029,
--1368,-1702,-2031,-2354,-2671,-2980,-3280,-3571,-3853,-4124,-4384,-4633,
--4870,-5096,-5309,-5511,-5701,-5879,-6045,-6200,-6344,-6478,-6602,-6718,
--6825,-6924,-7017,-7105,-7188,-7268,-7345,-7422,-7498,-7577,-7657,-7742,
--7832,-7929,-8033,-8147,-8270,-8405,-8552,-8713,-8887,-9078,-9284,-9507,
--9747,-10005,-10281,-10576,-10889,-11221,-11572,-11941,-12328,-12732,-13153,-13591,
--14043,-14509,-14989,-15480,-15981,-16491,-17007,-17529,-18055,-18582,-19108,-19631,
--20149,-20661,-21162,-21652,-22127,-22586,-23026,-23444,-23838,-24207,-24546,-24855,
--25131,-25372,-25575,-25739,-25863,-25943,-25979,-25969,-25912,-25806,-25651,-25445,
--25189,-24880,-24520,-24108,-23643,-23126,-22558,-21939,-21269,-20550,-19783,-18969,
--18110,-17207,-16262,-15277,-14255,-13197,-12106,-10985,-9836,-8662,-7466,-6251,
--5021,-3777,-2523,-1263
-};
+#include "piano_data.c"   /* sampled piano (see file header for license) */
 
 #define NV 6u
 static struct {
-    volatile uint32_t inc;
-    uint32_t ph;
-    volatile int32_t env;      /* Q15-ish amplitude, decays exponentially */
+    volatile uint8_t sample;   /* which piano sample */
+    volatile uint32_t pos;     /* 16.16 fixed-point sample position */
+    volatile uint32_t rate;    /* 16.16 fixed-point step per output sample */
+    volatile int32_t env;      /* current amplitude */
+    volatile int32_t target;   /* attack target amplitude */
+    volatile uint8_t rel;      /* releasing (damper) */
     uint8_t note;
     uint32_t age;
 } voice[NV];
 static volatile uint32_t ages;
 
-static const uint32_t INC_C9[12] = {
-    815363807u, 863847862u, 915214929u, 969636441u, 1027294024u, 1088380105u,
-    1153098554u, 1221665363u, 1294309365u, 1371273005u, 1452813141u, 1539201906u};
+/* playback rate for 22050 Hz samples at 44100 Hz output, offset -1/0/+1 semitone */
+static const uint32_t RATE_T[3] = { 30929u, 32768u, 34716u };
 
 static void piano_on(uint8_t note, uint8_t vel) {
     uint32_t v, pick = 0, best = 0xFFFFFFFFu;
+    int32_t si;
     if (note > 127u || !vel) return;
     for (v = 0; v < NV; v++) {
         /* same ringing note wins; otherwise the quietest voice */
@@ -57,37 +37,62 @@ static void piano_on(uint8_t note, uint8_t vel) {
             ? 0u : (uint32_t)voice[v].env + 1u;
         if (score < best) { best = score; pick = v; }
     }
+    /* nearest sample in minor thirds (samples at 54,57,...,78) */
+    si = ((int32_t)note - 54 + 1) / 3;
+    if (si < 0) si = 0;
+    if (si > 8) si = 8;
     voice[pick].note = note;
     voice[pick].age = ++ages;
-    voice[pick].inc = INC_C9[note % 12u] >> (10u - note / 12u);
-    voice[pick].ph = 0;
-    voice[pick].env = (int32_t)vel * 200;   /* 127 -> 25400 */
+    voice[pick].sample = (uint8_t)si;
+    voice[pick].pos = 0;
+    voice[pick].rate = RATE_T[(int32_t)note - (int32_t)piano_midi[si] + 1];
+    voice[pick].env = 0;
+    voice[pick].target = (int32_t)vel * 200;   /* 127 -> 25400 */
+    voice[pick].rel = 0;
 }
 static void piano_off(uint8_t note) {
     uint32_t v;
     for (v = 0; v < NV; v++)
-        if (voice[v].note == note) voice[v].env >>= 3;  /* damper */
+        if (voice[v].note == note) voice[v].rel = 1;  /* damper: fast fade */
 }
 /* audio ISR: keep it short, no flash, no screen */
 static void app_audio(int32_t *out, uint32_t n) {
     uint32_t v, i;
     for (v = 0; v < NV; v++) {
-        int32_t env = voice[v].env;
-        uint32_t ph = voice[v].ph, step = voice[v].inc;
-        if (env <= 0) continue;
+        const int16_t *smp;
+        int32_t env, target;
+        uint32_t pos, rate;
+        uint8_t rel;
+        if (!voice[v].target && !voice[v].env) continue;
+        smp = piano_samples[voice[v].sample];
+        env = voice[v].env; target = voice[v].target;
+        pos = voice[v].pos; rate = voice[v].rate; rel = voice[v].rel;
         for (i = 0; i < n; i++) {
-            int32_t s;
-            env -= (env >> 14) + 1;         /* exponential decay */
-            if (env < 0) env = 0;
-            ph += step;
-            s = WT[(ph >> 24) & 0xFFu];
+            uint32_t idx;
+            int32_t s0, s1, s;
+            if (rel) {                       /* damper release */
+                env -= (env >> 8) + 1;
+                if (env <= 0) { env = 0; target = 0; break; }
+            } else if (env < target) {       /* click-free attack */
+                env += ((target - env) >> 6) + 1;
+                if (env > target) env = target;
+            }
+            idx = pos >> 16;
+            if (idx >= PIANO_N) {            /* sustain loop */
+                pos -= (uint32_t)PIANO_LOOP_LEN << 16;
+                idx -= PIANO_LOOP_LEN;
+            }
+            s0 = smp[idx];
+            s1 = (idx + 1u < PIANO_N) ? smp[idx + 1u] : smp[PIANO_LOOP_START];
+            s = s0 + (((s1 - s0) * (int32_t)(pos & 0xFFFFu)) >> 16);
             s = (s * env) >> 15;
             out[2u * i] += s;
             out[2u * i + 1u] += s;
-            if (!env) break;
+            pos += rate;
         }
-        voice[v].ph = ph;
+        voice[v].pos = pos;
         voice[v].env = env;
+        voice[v].target = target;
     }
 }
 
