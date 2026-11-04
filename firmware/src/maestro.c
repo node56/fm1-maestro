@@ -97,23 +97,33 @@ static const lesson_t *pieces[NPIECES];
 static lesson_t drill_lesson;
 static const char *drill_title = "Drill";
 
-#define PXQ 20u   /* px per quarter note */
+#define PXQ 32u   /* px per quarter note: airy, classy */
+#define CLEF_W 64u   /* px reserved for the clef before tick 0 */
+#define BAR_PAD 16u  /* barline sits this far left of its tick */
 /* piece-x of event i (240 = right edge at scroll 0) */
 #define MAXEV 256
 static uint32_t evx[MAXEV];
 static uint16_t evn;
+static uint32_t total_ticks;
+static uint32_t bar_ticks;   /* ticks per bar */
 
 static void layout_piece(const lesson_t *L) {
     uint32_t t = 0;
     uint16_t i;
     for (i = 0; i < L->event_count && i < MAXEV; i++) {
-        evx[i] = 240u + (t * PXQ) / 96u;
+        evx[i] = 240u + CLEF_W + (t * PXQ) / 96u;
         t += L->events[i].ticks;
     }
     evn = i;
+    total_ticks = t;
+    bar_ticks = (uint32_t)L->beats_per_bar * 96u;
+    if (!bar_ticks) bar_ticks = 384u;
 }
 static int32_t tick_of(uint16_t i) {
-    return ((int32_t)evx[i] - 240) * 96 / (int32_t)PXQ;
+    return ((int32_t)evx[i] - 240 - (int32_t)CLEF_W) * 96 / (int32_t)PXQ;
+}
+static uint32_t bar_x(uint32_t b) {
+    return 240u + CLEF_W - BAR_PAD + (b * bar_ticks * PXQ) / 96u;
 }
 
 /* ---- app state ---- */
@@ -134,7 +144,6 @@ static uint16_t next_ev;
 static grade_t gr;
 static uint8_t tally = 0;          /* piece finished, tally shown */
 
-static struct { int32_t midi; uint32_t color; uint32_t until; } ov[8];
 static uint32_t indic_until;       /* speed indicator timeout */
 
 static const int32_t SPD_N[5] = {1, 3, 4, 6, 8};
@@ -143,20 +152,21 @@ static const char *SPD_S[5] = {"0.5x", "0.75x", "1x", "1.5x", "2x"};
 
 static uint32_t cursor_x(void) { return set.cursor_x; }
 
-static void overlay(int32_t midi, uint32_t color) {
-    uint32_t i;
-    for (i = 0; i < 8u; i++)
-        if (!ov[i].until || (int32_t)(fm1_ms - ov[i].until) >= 0) {
-            ov[i].midi = midi; ov[i].color = color;
-            ov[i].until = fm1_ms + 700u;
-            return;
-        }
-}
-
 /* ---- rendering ---- */
 static void draw_new_cols(uint32_t sc, uint32_t dx) {
-    uint32_t x0 = dx >= 240u ? 0u : 240u - dx, i;
+    uint32_t x0 = dx >= 240u ? 0u : 240u - dx, i, b;
     ui_staff_cols(x0, 240u);
+    if (sc <= 240u) {
+        uint32_t sx = 240u - sc;
+        if (sx < 240u && sx + 48u >= x0) ui_clef(sx);
+    }
+    for (b = 0; b * bar_ticks < total_ticks + bar_ticks; b++) {
+        uint32_t bx = bar_x(b), sx;
+        if (bx < sc) continue;
+        sx = bx - sc;
+        if (sx >= 240u || sx + 8u < x0) continue;
+        ui_bar(sx);
+    }
     for (i = 0; i < evn; i++) {
         uint32_t sx;
         if (evx[i] < sc) continue;
@@ -183,8 +193,9 @@ static void render_book(void) {
     ui_paper();                              /* static areas drawn once */
     ui_clear();
     ui_staff_cols(0u, 240u);
+    ui_clef(30u);
     for (i = 0; i < L->event_count; i++) {
-        x = 64u + (t * PXQ) / 96u;
+        x = 80u + (t * PXQ) / 96u;
         if (x > 232u) break;
         if (L->events[i].is_rest) ui_rest(x, L->events[i].ticks);
         else ui_note(x, L->events[i].midi, L->events[i].ticks);
@@ -193,6 +204,7 @@ static void render_book(void) {
     ui_blit();
     ui_title(title);
     ui_hint("SELECT flip - PLAY start");
+    ui_cursor_mark(set.cursor_x);
 }
 
 static void start_play(void) {
@@ -204,7 +216,6 @@ static void start_play(void) {
     next_ev = 0;
     grade_init(&gr);
     tally = 0;
-    for (i = 0; i < 8u; i++) ov[i].until = 0;
     ui_paper();                              /* static areas drawn once */
     ui_title(pl->title);
     ui_clear();
@@ -256,7 +267,7 @@ static void play_frame(void) {
             last_scroll = sc;
         }
     }
-    tick_now = ((int32_t)(cursor_x() + last_scroll) - 240) * 96 / (int32_t)PXQ;
+    tick_now = ((int32_t)(cursor_x() + last_scroll) - 240 - (int32_t)CLEF_W) * 96 / (int32_t)PXQ;
     win = timing_window_ms(pl->level);
     /* rests resolve themselves; overdue notes are misses */
     while (next_ev < evn) {
@@ -273,10 +284,7 @@ static void play_frame(void) {
         return;
     }
     ui_blit();
-    ui_cursor(cursor_x());
-    for (i = 0; i < 8u; i++)
-        if (ov[i].until && (int32_t)(now - ov[i].until) < 0)
-            ui_played(cursor_x(), ov[i].midi, ov[i].color);
+    if (!tally) ui_cursor_mark(cursor_x());
     if ((int32_t)(now - indic_until) < 0)
         ui_indic(SPD_S[set.speed_idx]);
 }
@@ -284,18 +292,18 @@ static void play_frame(void) {
 /* key press during play: judge the nearest expected note */
 static void on_key(uint8_t midi) {
     int32_t tick_now, estart, err_ms, win;
-    if (state != ST_PLAY || tally) { overlay(midi, UI_HIT_C); return; }
+    if (state != ST_PLAY || tally) return;
     while (next_ev < evn && pl->events[next_ev].is_rest) next_ev++;
-    if (next_ev >= evn) { overlay(midi, UI_MISS_C); return; }
-    tick_now = ((int32_t)(cursor_x() + last_scroll) - 240) * 96 / (int32_t)PXQ;
+    if (next_ev >= evn) { ui_played_scroll(cursor_x(), midi, 0); return; }
+    tick_now = ((int32_t)(cursor_x() + last_scroll) - 240 - (int32_t)CLEF_W) * 96 / (int32_t)PXQ;
     estart = tick_of(next_ev);
     err_ms = (tick_now - estart) * 60000 / ((int32_t)pl->tempo * 96);
     win = timing_window_ms(pl->level);
-    if (err_ms < -win || err_ms > win) { overlay(midi, UI_MISS_C); return; }
+    if (err_ms < -win || err_ms > win) { ui_played_scroll(cursor_x(), midi, 0); return; }
     {
         uint8_t ok = (midi == pl->events[next_ev].midi);
         grade_note(&gr, ok, err_ms, pl->level);
-        overlay(midi, ok ? UI_HIT_C : UI_MISS_C);
+        ui_played_scroll(cursor_x(), midi, ok);
         next_ev++;
     }
 }
