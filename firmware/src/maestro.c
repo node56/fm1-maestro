@@ -134,16 +134,17 @@ static uint32_t bar_x(uint32_t b) {
 }
 
 /* ---- state ----
- * The clean metaphor: sheet music on the stand (blue) + tape recorder (black).
- * Only one thing performs at a time.
- *   LISTEN:   blue notes perform (the score). Your keys sound but aren't written.
- *   REC:      tape rolls; your notes are written in black. Blue is a silent guide.
- *   PLAYBACK: black notes perform (the tape). Blue is silent.
+ * Blue notes are sheet music: silent, for reading. Only you make sound.
+ * Black notes are your writing: they sound on playback.
+ *   PLAY (practice): blue scrolls silent; you play along (not recorded).
+ *   REC:             blue scrolls silent (guide); you play, black recorded.
+ *   READY:           your take as black notation on the staff.
+ *   PLAYBACK:        black notation performs.
  */
 #define ST_BOOK 0u
-#define ST_LISTEN 1u
+#define ST_PLAY 1u      /* practice: blue silent, you play (not recorded) */
 #define ST_REC 2u
-#define ST_READY 3u     /* tape rewound */
+#define ST_READY 3u
 #define ST_PLAYBACK 4u
 #define ST_PAUSE 5u
 static uint8_t state = ST_BOOK;
@@ -162,9 +163,6 @@ static struct { uint32_t ms; uint8_t midi; uint8_t on; } rec[MAXREC];
 static uint16_t rec_n;
 static uint16_t pb_idx;          /* next rec event during playback */
 static uint8_t rec_on;           /* record live key events */
-static uint16_t next_trig;       /* next blue note to sound (LISTEN) */
-#define MAXHOLD 8
-static struct { uint8_t midi; uint32_t off_ms; } hold[MAXHOLD];  /* sounding blue notes */
 
 static uint32_t indic_until;     /* speed indicator timeout */
 
@@ -188,11 +186,36 @@ static void rec_event(uint8_t midi, uint8_t on) {
     rec_n++;
 }
 
-/* draw your played note in black at the cursor (it scrolls with the music) */
+/* live feedback: your note in black at the cursor */
 static void draw_played(uint8_t midi) {
     ui_plane_black();
     ui_note(cursor_x(), midi, 96u);
-    ui_plane_blue();  /* suggested notes are blue; restore for piece drawing */
+}
+
+/* recorded black notes, drawn as notation scrolling in (not popping in) */
+static void draw_rec_cols(uint32_t sc, uint32_t dx) {
+    uint32_t x0 = dx >= 240u ? 0u : 240u - dx;
+    uint16_t i, j;
+    ui_plane_black();
+    for (i = 0; i < rec_n; i++) {
+        uint32_t x, sx, ticks = 96u;
+        if (!rec[i].on) continue;
+        x = 240u + CLEF_W + (rec[i].ms * tempo * PXQ) / 60000u;
+        if (x < sc) continue;
+        sx = x - sc;
+        if (sx >= 240u || sx + 48u < x0) continue;
+        /* duration from the matching note-off */
+        for (j = i + 1u; j < rec_n; j++) {
+            if (!rec[j].on && rec[j].midi == rec[i].midi) {
+                uint32_t dms = rec[j].ms > rec[i].ms ? rec[j].ms - rec[i].ms : 0;
+                ticks = (dms * tempo * 96u) / 60000u;
+                if (ticks < 24u) ticks = 24u;
+                if (ticks > 384u) ticks = 384u;
+                break;
+            }
+        }
+        ui_note(sx, rec[i].midi, ticks);
+    }
 }
 
 /* ---- rendering ---- */
@@ -223,8 +246,10 @@ static void draw_new_cols(uint32_t sc, uint32_t dx) {
             if (pl->events[i].is_rest) ui_rest(sx, pl->events[i].ticks);
             else ui_note(sx, pl->events[i].midi, pl->events[i].ticks);
         }
-        ui_plane_black();
     }
+    /* your recorded take as black notation (if any) */
+    if (rec_n > 0) draw_rec_cols(sc, dx);
+    ui_plane_black();
 }
 
 static void book_title(char *dst) {
@@ -272,6 +297,7 @@ static void show_start(const char *title) {
     ui_clear();
     ui_plane_black();
     ui_staff_cols(0u, 240u);
+    ui_clef(30u);  /* clef at the left, like the book */
     draw_new_cols(0u, 240u);
     ui_blit();
     ui_cursor_mark(cursor_x());
@@ -302,18 +328,14 @@ static void setup_piece(void) {
 }
 
 
-/* PLAY from book: listen to the score (blue performs) */
-static void start_listen(void) {
-    uint8_t i;
+/* PLAY from book: practice (blue scrolls silent, you play along) */
+static void start_play(void) {
     setup_piece();
-    if (is_free) return;  /* nothing to listen to; use REC */
     play_ms = 0;
     scroll_f = 0; scroll_rem = 0; last_scroll = 0;
-    next_trig = 0;
-    for (i = 0; i < MAXHOLD; i++) hold[i].midi = 0;
     rec_on = 0;
-    show_start(pl->title);
-    state = ST_LISTEN;
+    show_start(is_free ? free_title : pl->title);
+    state = ST_PLAY;
     last_frame_ms = fm1_ms;
 }
 
@@ -329,15 +351,10 @@ static void start_rec(void) {
     last_frame_ms = fm1_ms;
 }
 
-/* tick -> ms (for blue note durations) */
-static uint32_t ms_of_tick(uint32_t ticks) {
-    return (ticks * 60000u) / (tempo * 96u);
-}
-
 /* one frame while the playhead advances */
 static void play_frame(void) {
     uint32_t now = fm1_ms;
-    uint32_t dt, num, den, sc, dx, i;
+    uint32_t dt, num, den, sc, dx;
     dt = now - last_frame_ms;
     last_frame_ms = now;
     play_ms += dt;
@@ -355,43 +372,13 @@ static void play_frame(void) {
         draw_new_cols(sc, dx);
         last_scroll = sc;
     }
-    if (state == ST_LISTEN && !is_free) {
-        /* blue notes perform: sound them as they reach the cursor */
-        uint32_t cx = cursor_x() + sc;
-        while (next_trig < evn && evx[next_trig] <= cx) {
-            if (!pl->events[next_trig].is_rest) {
-                uint8_t midi = pl->events[next_trig].midi;
-                uint32_t dur = ms_of_tick(pl->events[next_trig].ticks);
-                piano_on(midi, 90);
-                for (i = 0; i < MAXHOLD; i++)
-                    if (!hold[i].midi) {
-                        hold[i].midi = midi;
-                        hold[i].off_ms = play_ms + dur;
-                        break;
-                    }
-            }
-            next_trig++;
-        }
-        for (i = 0; i < MAXHOLD; i++)
-            if (hold[i].midi && (int32_t)(play_ms - hold[i].off_ms) >= 0) {
-                piano_off(hold[i].midi);
-                hold[i].midi = 0;
-            }
-        if (next_trig >= evn && evn && sc > evx[evn - 1u] + 240u) {
-            pause_resume = ST_LISTEN;
-            state = ST_PAUSE;
-            return;
-        }
-    } else if (state == ST_PLAYBACK) {
-        /* black notes perform: the tape */
+    if (state == ST_PLAYBACK) {
+        /* black notes perform: sound them as the playhead passes.
+           They're already on the staff (drawn by draw_rec_cols), no popping in. */
         while (pb_idx < rec_n && rec[pb_idx].ms <= play_ms) {
             uint8_t midi = rec[pb_idx].midi;
-            if (rec[pb_idx].on) {
-                piano_on(midi, 100);
-                draw_played(midi);
-            } else {
-                piano_off(midi);
-            }
+            if (rec[pb_idx].on) piano_on(midi, 100);
+            else piano_off(midi);
             pb_idx++;
         }
         if (pb_idx >= rec_n && rec_n && play_ms > rec[rec_n - 1u].ms + 2000u) {
@@ -399,23 +386,25 @@ static void play_frame(void) {
             state = ST_PAUSE;
             return;
         }
+    } else if (!is_free && evn && sc > evx[evn - 1u] + 240u) {
+        /* piece scrolled through (practice or rec) */
+        if (state == ST_PLAY) { pause_resume = ST_PLAY; state = ST_PAUSE; return; }
     }
-    /* ST_REC: tape rolls; your notes are drawn/recorded by on_key. */
+    /* ST_PLAY: practice (blue silent, you play). ST_REC: tape rolls. */
     ui_blit();
     ui_cursor_mark(cursor_x());
     if ((int32_t)(now - indic_until) < 0)
         ui_indic(SPD_S[set.speed_idx]);
 }
 
-/* live key press. In REC: drawn black + recorded. Otherwise: sounds only. */
+/* live key press. PLAY/REC: drawn black at cursor. REC: also recorded. */
 static void on_key(uint8_t midi) {
-    if (state != ST_REC) return;
+    if (state != ST_PLAY && state != ST_REC) return;
     draw_played(midi);
-    rec_event(midi, 1);
+    if (state == ST_REC) rec_event(midi, 1);
 }
 static void on_key_up(uint8_t midi) {
-    if (state != ST_REC) return;
-    rec_event(midi, 0);
+    if (state == ST_REC) rec_event(midi, 0);
 }
 
 /* ---- main ---- */
@@ -485,8 +474,8 @@ static void app_main(void) {
         { uint32_t rel_; b = fm1_input_edges(&rel_); }
         if (b & (1u << BTN_PLAY)) {
             if (state == ST_BOOK) {
-                start_listen();
-            } else if (state == ST_LISTEN || state == ST_PLAYBACK) {
+                start_play();  /* practice: blue silent, you play */
+            } else if (state == ST_PLAY || state == ST_PLAYBACK) {
                 pause_resume = state;
                 state = ST_PAUSE;
             } else if (state == ST_PAUSE) {
@@ -511,7 +500,7 @@ static void app_main(void) {
             }
         }
         if (b & (1u << BTN_HOME)) {
-            if (state == ST_LISTEN || state == ST_REC) {
+            if (state == ST_PLAY || state == ST_REC) {
                 save_if_dirty();
                 state = ST_BOOK;
                 render_book();
@@ -546,7 +535,7 @@ static void app_main(void) {
                 }
         }
 
-        if ((state == ST_LISTEN || state == ST_REC || state == ST_PLAYBACK) &&
+        if ((state == ST_PLAY || state == ST_REC || state == ST_PLAYBACK) &&
             fm1_ms - last_frame_ms >= 33u) {
             play_frame();
         }
