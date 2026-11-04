@@ -133,12 +133,21 @@ static uint32_t bar_x(uint32_t b) {
     return 240u + CLEF_W - BAR_PAD + (b * bar_ticks * PXQ) / 96u;
 }
 
-/* ---- state ---- */
+/* ---- state ----
+ * The clean metaphor: sheet music on the stand (blue) + tape recorder (black).
+ * Only one thing performs at a time.
+ *   LISTEN:   blue notes perform (the score). Your keys sound but aren't written.
+ *   REC:      tape rolls; your notes are written in black. Blue is a silent guide.
+ *   PLAYBACK: black notes perform (the tape). Blue is silent.
+ */
 #define ST_BOOK 0u
-#define ST_PLAY 1u    /* playhead advancing */
-#define ST_PAUSE 2u   /* frozen mid-piece */
-#define ST_READY 3u   /* rewound to the start */
+#define ST_LISTEN 1u
+#define ST_REC 2u
+#define ST_READY 3u     /* tape rewound */
+#define ST_PLAYBACK 4u
+#define ST_PAUSE 5u
 static uint8_t state = ST_BOOK;
+static uint8_t pause_resume;
 static uint8_t sel = 0;
 static uint8_t is_free = 0;      /* free play: no suggested notes */
 static uint32_t tempo = 72u;     /* bpm: piece tempo or FREE_TEMPO */
@@ -146,7 +155,6 @@ static const lesson_t *pl;
 
 static uint32_t play_ms;         /* playhead, ms since start */
 static uint32_t last_frame_ms;
-static uint8_t playback = 0;     /* playing back the recording */
 
 /* recording: what you played (ms, midi, on/off) */
 #define MAXREC 512
@@ -154,6 +162,9 @@ static struct { uint32_t ms; uint8_t midi; uint8_t on; } rec[MAXREC];
 static uint16_t rec_n;
 static uint16_t pb_idx;          /* next rec event during playback */
 static uint8_t rec_on;           /* record live key events */
+static uint16_t next_trig;       /* next blue note to sound (LISTEN) */
+#define MAXHOLD 8
+static struct { uint8_t midi; uint32_t off_ms; } hold[MAXHOLD];  /* sounding blue notes */
 
 static uint32_t indic_until;     /* speed indicator timeout */
 
@@ -255,23 +266,29 @@ static void render_book(void) {
     ui_cursor_mark(cursor_x());
 }
 
+static void show_start(const char *title) {
+    ui_paper();
+    ui_title(title);
+    ui_clear();
+    ui_plane_black();
+    ui_staff_cols(0u, 240u);
+    draw_new_cols(0u, 240u);
+    ui_blit();
+    ui_cursor_mark(cursor_x());
+}
+
 /* rewind to the beginning (keep the recording) */
 static void rewind_start(void) {
     play_ms = 0;
     scroll_f = 0; scroll_rem = 0; last_scroll = 0;
     pb_idx = 0;
-    ui_paper();
-    ui_title(is_free ? free_title : (sel == 5u ? drill_title : pl->title));
-    ui_clear();
-    ui_plane_black();
-    ui_staff_cols(0u, 240u);
-    ui_clef(30u);
-    ui_blit();
-    ui_cursor_mark(cursor_x());
+    rec_on = 0;
+    show_start(is_free ? free_title : pl->title);
+    ui_hint("PLAY: hear take - REC: new take");
     state = ST_READY;
 }
 
-static void start_play(void) {
+static void setup_piece(void) {
     is_free = (sel == FREE_IDX);
     if (is_free) {
         tempo = FREE_TEMPO;
@@ -282,28 +299,45 @@ static void start_play(void) {
         tempo = pl->tempo;
         layout_piece(pl);
     }
+}
+
+
+/* PLAY from book: listen to the score (blue performs) */
+static void start_listen(void) {
+    uint8_t i;
+    setup_piece();
+    if (is_free) return;  /* nothing to listen to; use REC */
     play_ms = 0;
     scroll_f = 0; scroll_rem = 0; last_scroll = 0;
-    pb_idx = 0;
-    rec_n = 0;
-    playback = 0;
-    rec_on = 1;
-    ui_paper();
-    ui_title(is_free ? free_title : (sel == 5u ? drill_title : pl->title));
-    ui_clear();
-    ui_plane_black();
-    ui_staff_cols(0u, 240u);
-    draw_new_cols(0u, 240u);
-    ui_blit();
-    ui_cursor_mark(cursor_x());
-    state = ST_PLAY;
+    next_trig = 0;
+    for (i = 0; i < MAXHOLD; i++) hold[i].midi = 0;
+    rec_on = 0;
+    show_start(pl->title);
+    state = ST_LISTEN;
     last_frame_ms = fm1_ms;
 }
 
-/* one frame while playing */
+/* REC: tape rolls from the start (erases previous take) */
+static void start_rec(void) {
+    setup_piece();
+    play_ms = 0;
+    scroll_f = 0; scroll_rem = 0; last_scroll = 0;
+    rec_n = 0;
+    rec_on = 1;
+    show_start(is_free ? free_title : pl->title);
+    state = ST_REC;
+    last_frame_ms = fm1_ms;
+}
+
+/* tick -> ms (for blue note durations) */
+static uint32_t ms_of_tick(uint32_t ticks) {
+    return (ticks * 60000u) / (tempo * 96u);
+}
+
+/* one frame while the playhead advances */
 static void play_frame(void) {
     uint32_t now = fm1_ms;
-    uint32_t dt, num, den, sc, dx;
+    uint32_t dt, num, den, sc, dx, i;
     dt = now - last_frame_ms;
     last_frame_ms = now;
     play_ms += dt;
@@ -321,8 +355,35 @@ static void play_frame(void) {
         draw_new_cols(sc, dx);
         last_scroll = sc;
     }
-    if (playback) {
-        /* play back the recording */
+    if (state == ST_LISTEN && !is_free) {
+        /* blue notes perform: sound them as they reach the cursor */
+        uint32_t cx = cursor_x() + sc;
+        while (next_trig < evn && evx[next_trig] <= cx) {
+            if (!pl->events[next_trig].is_rest) {
+                uint8_t midi = pl->events[next_trig].midi;
+                uint32_t dur = ms_of_tick(pl->events[next_trig].ticks);
+                piano_on(midi, 90);
+                for (i = 0; i < MAXHOLD; i++)
+                    if (!hold[i].midi) {
+                        hold[i].midi = midi;
+                        hold[i].off_ms = play_ms + dur;
+                        break;
+                    }
+            }
+            next_trig++;
+        }
+        for (i = 0; i < MAXHOLD; i++)
+            if (hold[i].midi && (int32_t)(play_ms - hold[i].off_ms) >= 0) {
+                piano_off(hold[i].midi);
+                hold[i].midi = 0;
+            }
+        if (next_trig >= evn && evn && sc > evx[evn - 1u] + 240u) {
+            pause_resume = ST_LISTEN;
+            state = ST_PAUSE;
+            return;
+        }
+    } else if (state == ST_PLAYBACK) {
+        /* black notes perform: the tape */
         while (pb_idx < rec_n && rec[pb_idx].ms <= play_ms) {
             uint8_t midi = rec[pb_idx].midi;
             if (rec[pb_idx].on) {
@@ -334,29 +395,26 @@ static void play_frame(void) {
             pb_idx++;
         }
         if (pb_idx >= rec_n && rec_n && play_ms > rec[rec_n - 1u].ms + 2000u) {
-            state = ST_PAUSE;  /* playback finished */
+            pause_resume = ST_PLAYBACK;
+            state = ST_PAUSE;
             return;
         }
-    } else if (!is_free && evn && sc > evx[evn - 1u] + 240u) {
-        state = ST_PAUSE;  /* piece scrolled through */
-        return;
     }
+    /* ST_REC: tape rolls; your notes are drawn/recorded by on_key. */
     ui_blit();
     ui_cursor_mark(cursor_x());
     if ((int32_t)(now - indic_until) < 0)
         ui_indic(SPD_S[set.speed_idx]);
-    if (playback)
-        ui_hint("Playback - PLAY pause");
 }
 
-/* live key press: sound it, draw it black, record it */
+/* live key press. In REC: drawn black + recorded. Otherwise: sounds only. */
 static void on_key(uint8_t midi) {
-    if (state != ST_PLAY) return;
+    if (state != ST_REC) return;
     draw_played(midi);
     rec_event(midi, 1);
 }
 static void on_key_up(uint8_t midi) {
-    if (state != ST_PLAY) return;
+    if (state != ST_REC) return;
     rec_event(midi, 0);
 }
 
@@ -427,29 +485,39 @@ static void app_main(void) {
         { uint32_t rel_; b = fm1_input_edges(&rel_); }
         if (b & (1u << BTN_PLAY)) {
             if (state == ST_BOOK) {
-                start_play();
-            } else if (state == ST_PLAY) {
+                start_listen();
+            } else if (state == ST_LISTEN || state == ST_PLAYBACK) {
+                pause_resume = state;
                 state = ST_PAUSE;
             } else if (state == ST_PAUSE) {
-                state = ST_PLAY;
+                state = pause_resume;
                 last_frame_ms = fm1_ms;
             } else if (state == ST_READY) {
-                /* PLAY after rewind: play back the recording if there is one */
-                playback = (rec_n > 0);
-                rec_on = !playback;
-                pb_idx = 0;
-                state = ST_PLAY;
-                last_frame_ms = fm1_ms;
+                if (rec_n > 0) {  /* PLAY: hear the take */
+                    pb_idx = 0;
+                    rec_on = 0;
+                    state = ST_PLAYBACK;
+                    last_frame_ms = fm1_ms;
+                }
+            } else if (state == ST_REC) {
+                rewind_start();  /* PLAY stops the take */
+            }
+        }
+        if (b & (1u << BTN_REC)) {
+            if (state == ST_BOOK || state == ST_READY || state == ST_PLAYBACK) {
+                start_rec();  /* REC erases the tape and rolls */
+            } else if (state == ST_REC) {
+                rewind_start();  /* REC stops the take */
             }
         }
         if (b & (1u << BTN_HOME)) {
-            if (state == ST_PLAY || state == ST_PAUSE) {
-                save_if_dirty();
-                rewind_start();  /* HOME returns to the beginning */
-            } else if (state == ST_READY) {
+            if (state == ST_LISTEN || state == ST_REC) {
                 save_if_dirty();
                 state = ST_BOOK;
                 render_book();
+            } else if (state == ST_PLAYBACK || state == ST_PAUSE || state == ST_READY) {
+                save_if_dirty();
+                rewind_start();
             }
         }
 
@@ -478,7 +546,8 @@ static void app_main(void) {
                 }
         }
 
-        if (state == ST_PLAY && fm1_ms - last_frame_ms >= 33u) {
+        if ((state == ST_LISTEN || state == ST_REC || state == ST_PLAYBACK) &&
+            fm1_ms - last_frame_ms >= 33u) {
             play_frame();
         }
 
