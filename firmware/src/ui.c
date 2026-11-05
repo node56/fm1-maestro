@@ -148,6 +148,13 @@ void ui_bar(uint32_t x) {
     vline(x, STAFF_TOP, STAFF_BOT);
 }
 
+/* final double bar: thin line, then a thick line 3px right */
+void ui_endbar(uint32_t x) {
+    vline(x, STAFF_TOP, STAFF_BOT);
+    vline(x + 3u, STAFF_TOP, STAFF_BOT);
+    vline(x + 4u, STAFF_TOP, STAFF_BOT);
+}
+
 /* draw a 1-bit glyph bitmap into the current plane.
  * x0 may be negative (glyph sliding off the left edge); left columns clip. */
 static void glyph_blit(int32_t x0, uint32_t y0,

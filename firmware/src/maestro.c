@@ -2,18 +2,28 @@
 /* Maestro: the screen is sheet music, the buttons are a tape recorder.
  *
  * PLAY starts the tape moving. REC starts it moving and stores what you
- * play. PLAY during REC punches out (keeps moving, stops storing); REC
- * during PLAY punches in. PLAY or REC while moving stops the tape.
+ * play, with the erase head on: the playhead wipes the old take where it
+ * passes. SEQ is the same recorder with the erase head off (punch in:
+ * only same-pitch notes at the playhead are replaced). PLAY during REC
+ * punches out (keeps moving, stops storing); REC/SEQ during PLAY punch
+ * in. PLAY or the active record button while moving stops the tape.
  * HOME rewinds to the start; HOME at the start goes back to the book.
+ * ARP toggles looping at the end; SAVE marks the end of a free-play take.
  * KNOB2 is speed while moving, a scrub knob while stopped.
+ *
+ * The panel lights follow the state: PLAY bright while playing, REC
+ * bright while tape-recording, SEQ bright while punch-recording, ARP
+ * bright while looping, SAVE bright once a free-play end is marked,
+ * HOME bright always; the rest sit at a dim glow.
  *
  * Rendering is positional: render_window(sc) draws whatever is at scroll
  * position sc, forward or backward. Nothing is ever "reset" on PLAY/REC;
  * they just set the tape moving and whether notes are stored.
  *
  * Blue notes are the sheet music (silent, for reading). Black notes are
- * your take. REC overwrites whatever is at the playhead (same pitch,
- * nearby position); there is no blanket erase.
+ * your take. The piece ends at a final double bar; ARP loops back to the
+ * start there. A score is a program: the end bar is Fine, the loop is a
+ * jump to the start, and the playhead is the program counter.
  */
 
 #include "piano_data.c"   /* sampled piano (see file header for license) */
@@ -125,10 +135,12 @@ static uint32_t bar_ticks;
 #define SYM_BAR 1u
 #define SYM_NOTE 2u
 #define SYM_REST 3u
+#define SYM_END 4u   /* final double bar: the piece's Fine */
 typedef struct { uint16_t x; uint8_t type; uint8_t midi; uint16_t ticks; } psym_t;
-#define MAXPSYM (1u + 64u + MAXEV)
+#define MAXPSYM (1u + 64u + MAXEV + 1u)
 static psym_t psym[MAXPSYM];
 static uint16_t psym_n;
+static uint32_t piece_end_x;   /* piece-x of the final bar (book pieces) */
 
 static uint32_t bar_x(uint32_t b) {
     return CLEF_W - BAR_PAD + (b * bar_ticks * PXQ) / 96u;
@@ -145,28 +157,36 @@ static void layout_piece(const lesson_t *L) {
     total_ticks = t;
     bar_ticks = (uint32_t)L->beats_per_bar * 96u;
     if (!bar_ticks) bar_ticks = 384u;
-    /* symbols: clef, bars, notes/rests (order doesn't matter; planes decide) */
+    /* symbols: clef, bars, notes/rests, final bar (order doesn't matter;
+     * planes decide). The end sits just past the last note's duration. */
     psym_n = 0;
     psym[psym_n].x = CLEF_X; psym[psym_n].type = SYM_CLEF; psym_n++;
-    for (b = 1; b * bar_ticks < total_ticks + bar_ticks; b++) {
+    for (b = 1; b * bar_ticks < total_ticks + bar_ticks && psym_n < MAXPSYM; b++) {
         psym[psym_n].x = (uint16_t)bar_x(b); psym[psym_n].type = SYM_BAR; psym_n++;
     }
-    for (i = 0; i < evn; i++) {
+    for (i = 0; i < evn && psym_n < MAXPSYM; i++) {
         psym[psym_n].x = (uint16_t)evx[i];
         psym[psym_n].type = L->events[i].is_rest ? SYM_REST : SYM_NOTE;
         psym[psym_n].midi = L->events[i].midi;
         psym[psym_n].ticks = L->events[i].ticks;
         psym_n++;
     }
+    piece_end_x = evn ? evx[evn - 1u] + (uint32_t)L->events[evn - 1u].ticks * PXQ / 96u : CLEF_W;
+    if (psym_n < MAXPSYM) {
+        psym[psym_n].x = (uint16_t)piece_end_x; psym[psym_n].type = SYM_END; psym_n++;
+    }
 }
 /* ---- transport: a tape recorder ---- */
 #define ST_BOOK 0u
 #define ST_STOP 1u   /* tape stopped, at the current position */
 #define ST_PLAY 2u   /* tape moving; black notes sound at the playhead */
-#define ST_REC 3u    /* tape moving; your notes overwrite at the playhead */
+#define ST_REC 3u    /* tape moving; your notes are stored at the playhead */
 static uint8_t state = ST_BOOK;
 static uint8_t sel = 0;
 static uint8_t is_free = 0;
+static uint8_t loop_on = 0;      /* ARP: loop back to the start at the end */
+static uint8_t free_end_set = 0; /* SAVE: a free-play take has a marked end */
+static uint32_t free_end_x = 0;  /* piece-x of the marked end (free play) */
 static uint32_t tempo = 72u;
 static const lesson_t *pl;
 
@@ -187,8 +207,11 @@ static uint32_t play_x(void) { return scroll_px + cursor_x(); }  /* playhead pie
 /* ---- the take: notes, sorted by x ---- */
 #define MAXREC 512
 #define PUNCH_W 8u   /* overwrite same-pitch notes within this many px */
-static struct { uint16_t x; uint16_t ticks; uint8_t midi; } rec[MAXREC];
+static struct { uint16_t x; uint16_t ticks; uint8_t midi; uint16_t pass; } rec[MAXREC];
 static uint16_t rec_n;
+static uint8_t rec_erase = 1;  /* REC: erase head on (tape); SEQ: off (punch) */
+static uint16_t rec_pass = 0;  /* recording epoch; the erase head spares this pass */
+static uint16_t erase_idx = 0; /* first take note the erase head hasn't passed */
 
 /* playback: next note to start, and notes currently sounding */
 static uint16_t pb_idx;
@@ -211,6 +234,7 @@ static void rec_note_on(uint8_t midi) {
     rec[i].x = x;
     rec[i].ticks = 0;  /* open; closed by the note-off */
     rec[i].midi = midi;
+    rec[i].pass = rec_pass;
     rec_n++;
 }
 static void rec_note_off(uint8_t midi) {
@@ -258,10 +282,20 @@ static void render_window(uint32_t sc) {
                 ui_plane_blue();
                 ui_rest((uint32_t)sx, psym[i].ticks);
                 break;
+            case SYM_END:
+                if (sx < 0) break;
+                ui_plane_black();
+                ui_endbar((uint32_t)sx);
+                break;
             }
         }
     }
     ui_plane_black();
+    if (is_free && free_end_set) {
+        /* the marked end of a free-play take */
+        int32_t ex = (int32_t)free_end_x - (int32_t)sc;
+        if (ex >= 0 && ex < 240) ui_endbar((uint32_t)ex);
+    }
     for (i = 0; i < rec_n; i++) {
         uint32_t sx;
         if (rec[i].x < sc || rec[i].x >= sc + 240u) continue;
@@ -308,11 +342,35 @@ static void silence_playback(void) {
     n_sounding = 0;
 }
 
+/* the panel lights follow the state: PLAY bright while playing, REC
+ * bright while tape-recording, SEQ bright while punch-recording, ARP
+ * bright while looping, SAVE bright once a free-play end is marked,
+ * HOME bright always; the rest sit at a dim glow. */
+static void leds_update(void) {
+#if BOARD_SMK37
+    uint32_t nbtn = 18u;
+#else
+    uint32_t nbtn = 14u;
+#endif
+    uint32_t b;
+    for (b = 0; b < nbtn; b++) {
+        uint8_t bright = 0;
+        if (b == (uint32_t)BTN_HOME) bright = 1;
+        else if (b == (uint32_t)BTN_PLAY) bright = (state == ST_PLAY);
+        else if (b == (uint32_t)BTN_REC) bright = (state == ST_REC && rec_erase);
+        else if (b == (uint32_t)BTN_SEQ) bright = (state == ST_REC && !rec_erase);
+        else if (b == (uint32_t)BTN_ARP) bright = loop_on;
+        else if (b == (uint32_t)BTN_SAVE) bright = (is_free && free_end_set);
+        if (bright) { fm1_led_key(b, 1); fm1_led_key_glow(b, 0); }
+        else { fm1_led_key(b, 0); fm1_led_key_glow(b, 1); }
+    }
+}
+
 /* stop the tape, stay where you are */
 static void tape_stop(void) {
     silence_playback();
     state = ST_STOP;
-    ui_hint("PLAY resume - REC punch in");
+    ui_hint("PLAY resume - REC tape - SEQ");
 }
 
 /* start moving; black notes sound as the playhead reaches them */
@@ -322,14 +380,30 @@ static void tape_play(void) {
     n_sounding = 0;
     state = ST_PLAY;
     last_frame_ms = fm1_ms;
-    ui_hint("PLAY stop - REC punch in");
+    ui_hint("PLAY stop - REC in - SEQ in");
 }
 
-/* start moving and storing; overwrites at the playhead, never erases all */
-static void tape_rec(void) {
+/* start moving and storing. erase=1 (REC): the erase head wipes the old
+ * take where the playhead passes. erase=0 (SEQ): punch in, no erase. */
+static void tape_rec(uint8_t erase) {
+    rec_erase = erase;
+    rec_pass++;
+    erase_idx = 0;
+    while (erase_idx < rec_n && rec[erase_idx].x < play_x()) erase_idx++;
     state = ST_REC;
     last_frame_ms = fm1_ms;
-    ui_hint("REC stop - PLAY punch out");
+    ui_hint(erase ? "REC stop - PLAY punch out" : "SEQ stop - PLAY punch out");
+}
+
+/* loop back to the start (the end bar is a jump, not a stop) */
+static void loop_wrap(void) {
+    silence_playback();
+    scroll_px = 0; scroll_frac = 0;
+    pb_idx = 0;
+    if (state == ST_REC) {
+        rec_pass++;      /* a new loop iteration is a new pass */
+        erase_idx = 0;   /* the head restarts at the very beginning */
+    }
 }
 
 /* one frame while the tape moves */
@@ -345,6 +419,17 @@ static void play_frame(void) {
     scroll_frac += num % den;
     if (scroll_frac >= den) { scroll_px += scroll_frac / den; scroll_frac %= den; }
     px = play_x();
+    if (state == ST_REC && rec_erase) {
+        /* erase head: wipe the old take where the playhead has passed.
+         * Notes from this pass are spared, so what you just played stays. */
+        while (erase_idx < rec_n && rec[erase_idx].x < px) {
+            if (rec[erase_idx].pass != rec_pass) {
+                uint16_t j;
+                for (j = erase_idx; j + 1u < rec_n; j++) rec[j] = rec[j + 1u];
+                rec_n--;
+            } else erase_idx++;
+        }
+    }
     if (state == ST_PLAY) {
         /* sound black notes as the playhead reaches them */
         while (pb_idx < rec_n && rec[pb_idx].x <= px) {
@@ -365,14 +450,26 @@ static void play_frame(void) {
                 n_sounding--;
             } else i++;
         }
-        /* end of the piece: stop the tape */
-        if (!is_free && evn && px > evx[evn - 1u] + 240u) {
-            tape_stop();
-            render_window(scroll_px);
-            return;
-        }
-        if (is_free && rec_n > 0 && pb_idx >= rec_n && !n_sounding &&
-            px > rec[rec_n - 1u].x + 240u) {
+    }
+    if (state == ST_PLAY || state == ST_REC) {
+        /* the definitive end: the final bar (book) or the marked end (free) */
+        uint32_t end = 0;
+        uint8_t has_end = 0;
+        if (!is_free && evn) { end = piece_end_x; has_end = 1; }
+        else if (is_free && free_end_set) { end = free_end_x; has_end = 1; }
+        if (has_end && px >= end) {
+            if (loop_on) {
+                loop_wrap();
+            } else if (px > end + 240u) {
+                /* let the end bar scroll off, then stop */
+                tape_stop();
+                render_window(scroll_px);
+                return;
+            }
+        } else if (!has_end && is_free && rec_n > 0 && state == ST_PLAY &&
+                   pb_idx >= rec_n && !n_sounding &&
+                   px > rec[rec_n - 1u].x + 240u) {
+            /* open take, no marked end: stop past the last note */
             tape_stop();
             render_window(scroll_px);
             return;
@@ -419,18 +516,7 @@ static void app_main(void) {
     if (sel >= NBOOK) sel = 0;
     setup_piece();
 
-    /* light the panel: transport bright, the other buttons a dim glow
-     * (so the panel reads in the dark and PLAY/HOME/REC stand out) */
-    {
-        uint32_t b;
-        for (b = 0; b < 14u; b++) {
-            if (b == (uint32_t)BTN_PLAY || b == (uint32_t)BTN_HOME || b == (uint32_t)BTN_REC)
-                fm1_led_key(b, 1);
-            else
-                fm1_led_key_glow(b, 1);
-        }
-    }
-
+    leds_update();  /* the panel lights follow the state */
     render_book();
 
     for (;;) {
@@ -444,6 +530,7 @@ static void app_main(void) {
             while (s < 0) s += NBOOK;
             sel = (uint8_t)(s % NBOOK);
             rec_n = 0;  /* new piece, new tape */
+            free_end_set = 0; free_end_x = 0;
             setup_piece();
             render_book();
             set_dirty = 1;
@@ -497,15 +584,41 @@ static void app_main(void) {
                 setup_piece();
                 scroll_px = 0; scroll_frac = 0;
                 render_window(0u);
-                tape_rec();
+                tape_rec(1);  /* tape: erase head on */
             } else if (state == ST_STOP) {
-                tape_rec();
+                tape_rec(1);
             } else if (state == ST_PLAY) {
-                tape_rec();  /* punch in, keep moving */
+                tape_rec(1);  /* punch in, keep moving */
             } else if (state == ST_REC) {
                 tape_stop();
             }
         }
+        if (b & (1u << BTN_SEQ)) {
+            if (state == ST_BOOK) {
+                setup_piece();
+                scroll_px = 0; scroll_frac = 0;
+                render_window(0u);
+                tape_rec(0);  /* punch in: erase head off */
+            } else if (state == ST_STOP) {
+                tape_rec(0);
+            } else if (state == ST_PLAY) {
+                tape_rec(0);  /* punch in, keep moving */
+            } else if (state == ST_REC) {
+                tape_stop();
+            }
+        }
+        if (b & (1u << BTN_ARP)) {
+            loop_on = !loop_on;  /* loop at the end bar */
+        }
+        if (b & (1u << BTN_SAVE)) {
+            /* mark the end of a free-play take at the playhead */
+            if (is_free && state != ST_BOOK) {
+                free_end_x = play_x();
+                free_end_set = 1;
+                if (state == ST_STOP) render_window(scroll_px);
+            }
+        }
+        leds_update();
         if (b & (1u << BTN_HOME)) {
             if (state == ST_PLAY || state == ST_REC) {
                 save_if_dirty();
