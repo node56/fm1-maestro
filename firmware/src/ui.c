@@ -148,25 +148,29 @@ void ui_bar(uint32_t x) {
     vline(x, STAFF_TOP, STAFF_BOT);
 }
 
-/* draw a 1-bit glyph bitmap into the current plane (absolute coords) */
-static void glyph_blit(uint32_t x0, uint32_t y0,
+/* draw a 1-bit glyph bitmap into the current plane.
+ * x0 may be negative (glyph sliding off the left edge); left columns clip. */
+static void glyph_blit(int32_t x0, uint32_t y0,
                        const uint8_t *g, uint32_t w, uint32_t h, uint32_t bpr) {
     uint32_t y, x;
+    uint32_t skip = x0 < 0 ? (uint32_t)(-x0) : 0;
+    if (skip >= w) return;
     for (y = 0; y < h; y++)
-        for (x = 0; x < w; x++)
+        for (x = skip; x < w; x++)
             if (g[y * bpr + (x >> 3)] & (0x80u >> (x & 7u)))
-                px(x0 + x, y0 + y);
+                px((uint32_t)(x0 + (int32_t)x), y0 + y);
 }
 
-/* treble clef from Bravura (see glyphs.h). Spiral centers on the G line. */
-void ui_clef(uint32_t x) {
+/* treble clef from Bravura (see glyphs.h). Spiral centers on the G line.
+ * x is the screen position of the glyph's left edge (may be negative). */
+void ui_clef(int32_t x) {
     glyph_blit(x, STAFF_BOT - STAFF_SPC - GCLEF_G_OFF,
                glyph_gclef, GCLEF_W, GCLEF_H, GCLEF_BPR);
 }
 
 /* accidental before a notehead: 0=sharp, 1=flat, 2=natural.
  * Centers on the note's staff y. */
-void ui_accidental(uint32_t x, uint32_t y, uint32_t kind) {
+void ui_accidental(int32_t x, uint32_t y, uint32_t kind) {
     const uint8_t *g;
     uint32_t w, h, bpr, off;
     if (kind == 0u) { g = glyph_sharp; w = SHARP_W; h = SHARP_H; bpr = SHARP_BPR; off = SHARP_H / 2u; }

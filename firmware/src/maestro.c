@@ -117,8 +117,25 @@ static uint16_t evn;
 static uint32_t total_ticks;
 static uint32_t bar_ticks;
 
+/* ---- the piece as symbols: a list of (offset, what) the renderer draws ----
+ * The clef is a symbol like any other: it has an offset and scrolls with
+ * the sheet, instead of being a fixed UI element. */
+#define CLEF_X 30u   /* clef offset on the staff */
+#define SYM_CLEF 0u
+#define SYM_BAR 1u
+#define SYM_NOTE 2u
+#define SYM_REST 3u
+typedef struct { uint16_t x; uint8_t type; uint8_t midi; uint16_t ticks; } psym_t;
+#define MAXPSYM (1u + 64u + MAXEV)
+static psym_t psym[MAXPSYM];
+static uint16_t psym_n;
+
+static uint32_t bar_x(uint32_t b) {
+    return CLEF_W - BAR_PAD + (b * bar_ticks * PXQ) / 96u;
+}
+
 static void layout_piece(const lesson_t *L) {
-    uint32_t t = 0;
+    uint32_t t = 0, b;
     uint16_t i;
     for (i = 0; i < L->event_count && i < MAXEV; i++) {
         evx[i] = CLEF_W + (t * PXQ) / 96u;
@@ -128,11 +145,20 @@ static void layout_piece(const lesson_t *L) {
     total_ticks = t;
     bar_ticks = (uint32_t)L->beats_per_bar * 96u;
     if (!bar_ticks) bar_ticks = 384u;
+    /* symbols: clef, bars, notes/rests (order doesn't matter; planes decide) */
+    psym_n = 0;
+    psym[psym_n].x = CLEF_X; psym[psym_n].type = SYM_CLEF; psym_n++;
+    for (b = 1; b * bar_ticks < total_ticks + bar_ticks; b++) {
+        psym[psym_n].x = (uint16_t)bar_x(b); psym[psym_n].type = SYM_BAR; psym_n++;
+    }
+    for (i = 0; i < evn; i++) {
+        psym[psym_n].x = (uint16_t)evx[i];
+        psym[psym_n].type = L->events[i].is_rest ? SYM_REST : SYM_NOTE;
+        psym[psym_n].midi = L->events[i].midi;
+        psym[psym_n].ticks = L->events[i].ticks;
+        psym_n++;
+    }
 }
-static uint32_t bar_x(uint32_t b) {
-    return CLEF_W - BAR_PAD + (b * bar_ticks * PXQ) / 96u;
-}
-
 /* ---- transport: a tape recorder ---- */
 #define ST_BOOK 0u
 #define ST_STOP 1u   /* tape stopped, at the current position */
@@ -199,29 +225,43 @@ static void rec_note_off(uint8_t midi) {
     }
 }
 
-/* ---- rendering: draw the window at scroll position sc ---- */
+/* ---- rendering: draw the window at scroll position sc ----
+ * Every symbol on the staff has an offset; the renderer draws the ones
+ * in [sc, sc+240). The clef is a symbol, so it scrolls with the sheet
+ * (and slides off the left edge via glyph clipping) instead of staying put. */
 static void render_window(uint32_t sc) {
-    uint32_t i, b;
+    uint32_t i;
     ui_clear();
     ui_plane_black();
     ui_staff_cols(0u, 240u);
-    ui_clef(30u);
     if (!is_free) {
-        for (b = 1; b * bar_ticks < total_ticks + bar_ticks; b++) {  /* no barline at 0; the clef marks the start */
-            uint32_t bx = bar_x(b);
-            if (bx < sc || bx >= sc + 240u) continue;
-            ui_bar(bx - sc);
+        for (i = 0; i < psym_n; i++) {
+            int32_t sx = (int32_t)psym[i].x - (int32_t)sc;
+            if (sx >= 240) continue;
+            switch (psym[i].type) {
+            case SYM_CLEF:
+                ui_plane_black();
+                if (sx + (int32_t)GCLEF_W > 0) ui_clef(sx);
+                break;
+            case SYM_BAR:
+                if (sx < 0) break;
+                ui_plane_black();
+                ui_bar((uint32_t)sx);
+                break;
+            case SYM_NOTE:
+                if (sx < 0) break;
+                ui_plane_blue();
+                ui_note((uint32_t)sx, psym[i].midi, psym[i].ticks);
+                break;
+            case SYM_REST:
+                if (sx < 0) break;
+                ui_plane_blue();
+                ui_rest((uint32_t)sx, psym[i].ticks);
+                break;
+            }
         }
-        ui_plane_blue();
-        for (i = 0; i < evn; i++) {
-            uint32_t sx;
-            if (evx[i] < sc || evx[i] >= sc + 240u) continue;
-            sx = evx[i] - sc;
-            if (pl->events[i].is_rest) ui_rest(sx, pl->events[i].ticks);
-            else ui_note(sx, pl->events[i].midi, pl->events[i].ticks);
-        }
-        ui_plane_black();
     }
+    ui_plane_black();
     for (i = 0; i < rec_n; i++) {
         uint32_t sx;
         if (rec[i].x < sc || rec[i].x >= sc + 240u) continue;

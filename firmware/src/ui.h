@@ -38,8 +38,8 @@ uint32_t ui_y_of(int32_t dia);             /* buffer y for a diatonic step */
 void ui_note(uint32_t x, int32_t midi, uint32_t ticks);
 void ui_rest(uint32_t x, uint32_t ticks);
 void ui_bar(uint32_t x);                   /* bar line across the staff */
-void ui_clef(uint32_t x);                  /* treble clef (Bravura glyph) at the start */
-void ui_accidental(uint32_t x, uint32_t y, uint32_t kind); /* 0=sharp 1=flat 2=natural */
+void ui_clef(int32_t x);                   /* treble clef (Bravura glyph); x may be negative */
+void ui_accidental(int32_t x, uint32_t y, uint32_t kind); /* 0=sharp 1=flat 2=natural */
 
 /* push the planes to the LCD (composited) */
 void ui_blit(void);
