@@ -8,7 +8,7 @@
 import { Updater } from './vendor/fm1ota.js';
 import { productOf, logicalImage, sha256hex } from './vendor/fm1pkg.js';
 
-const FW_URL = 'fw/maestro-v0.8.fwsc';
+const FW_URL = 'fw/maestro-v0.9.fwsc';
 const IS_OTA = (id) => /^ota-/i.test(id.model);
 
 const $ = (id) => document.getElementById(id);

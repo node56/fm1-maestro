@@ -108,7 +108,7 @@ static lesson_t drill_lesson;
 static const char *free_title = "Free Play";
 
 #define PXQ 32u      /* px per quarter note */
-#define CLEF_W 64u   /* tick 0 sits here; clef at x=30, first note visible at scroll 0 */
+#define CLEF_W 80u   /* tick 0 sits here; Bravura clef (38px at x=30) ends at 68 */
 #define BAR_PAD 16u  /* barline sits this far left of its tick */
 #define FREE_TEMPO 72u
 #define MAXEV 256
@@ -207,7 +207,7 @@ static void render_window(uint32_t sc) {
     ui_staff_cols(0u, 240u);
     ui_clef(30u);
     if (!is_free) {
-        for (b = 0; b * bar_ticks < total_ticks + bar_ticks; b++) {
+        for (b = 1; b * bar_ticks < total_ticks + bar_ticks; b++) {  /* no barline at 0; the clef marks the start */
             uint32_t bx = bar_x(b);
             if (bx < sc || bx >= sc + 240u) continue;
             ui_bar(bx - sc);

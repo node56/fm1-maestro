@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Maestro staff renderer: 1-bit planes -> composited RGB565 blit. */
 #include "ui.h"
+#include "glyphs.h"
 
 /* colors are RGB565 */
 #define PAPER UI_PAPER
@@ -147,15 +148,31 @@ void ui_bar(uint32_t x) {
     vline(x, STAFF_TOP, STAFF_BOT);
 }
 
-/* treble clef, stylized for 1-bit. G line (2nd from bottom) is y=136. */
+/* draw a 1-bit glyph bitmap into the current plane (absolute coords) */
+static void glyph_blit(uint32_t x0, uint32_t y0,
+                       const uint8_t *g, uint32_t w, uint32_t h, uint32_t bpr) {
+    uint32_t y, x;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++)
+            if (g[y * bpr + (x >> 3)] & (0x80u >> (x & 7u)))
+                px(x0 + x, y0 + y);
+}
+
+/* treble clef from Bravura (see glyphs.h). Spiral centers on the G line. */
 void ui_clef(uint32_t x) {
-    vline(x, 84u, 200u);                 /* main stroke */
-    ellipse_o(x, 142u, 11u, 14u);        /* belly around the G line */
-    ellipse_o(x, 112u, 6u, 8u);          /* upper loop */
-    px(x - 1u, 83u); px(x - 2u, 82u); px(x - 3u, 82u);
-    px(x - 4u, 83u); px(x - 5u, 84u);    /* top hook */
-    px(x - 1u, 201u); px(x - 2u, 202u); px(x - 3u, 203u);
-    px(x - 4u, 203u); px(x - 5u, 202u); px(x - 6u, 200u); /* tail */
+    glyph_blit(x, STAFF_BOT - STAFF_SPC - GCLEF_G_OFF,
+               glyph_gclef, GCLEF_W, GCLEF_H, GCLEF_BPR);
+}
+
+/* accidental before a notehead: 0=sharp, 1=flat, 2=natural.
+ * Centers on the note's staff y. */
+void ui_accidental(uint32_t x, uint32_t y, uint32_t kind) {
+    const uint8_t *g;
+    uint32_t w, h, bpr, off;
+    if (kind == 0u) { g = glyph_sharp; w = SHARP_W; h = SHARP_H; bpr = SHARP_BPR; off = SHARP_H / 2u; }
+    else if (kind == 1u) { g = glyph_flat; w = FLAT_W; h = FLAT_H; bpr = FLAT_BPR; off = FLAT_H - 10u; }
+    else { g = glyph_natural; w = NATURAL_W; h = NATURAL_H; bpr = NATURAL_BPR; off = NATURAL_H / 2u; }
+    glyph_blit(x, y >= off ? y - off : 0u, g, w, h, bpr);
 }
 
 /* composite one region row: blue (suggested) > black (staff, your notes) > paper */

@@ -36,6 +36,16 @@ thirds, used under **CC-BY 3.0**
 downmixed to mono, resampled to 22050 Hz, trimmed, normalized, and given
 crossfaded sustain loops for this project. Thank you, Alexander.
 
+## Music glyphs
+
+`firmware/src/glyphs.h` contains 1-bit bitmaps extracted from **Bravura**,
+the SMuFL reference font by Daniel Spreadbury / Steinberg, used under
+the **SIL Open Font License 1.1** (https://openfontlicense.org/). The
+glyphs (treble clef, sharp, flat, natural) were rendered at a 14px staff
+space and thresholded to 1-bit for this display. Bravura is the reference
+font for SMuFL (Standard Music Font Layout); the full OFL text ships with
+the font distribution.
+
 ## Trademarks
 
 M-VAVE and FM-1 are trademarks of their respective owners. This
