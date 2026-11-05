@@ -44,35 +44,6 @@ void ui_clear(void) {
         blk_pfb[i] = blu_pfb[i] = 0;
 }
 
-/* shift all planes left by dx pixels (dx < 240) */
-void ui_scroll_px(uint32_t dx) {
-    uint32_t y, i, p;
-    uint8_t *planes[2] = { blk_pfb, blu_pfb };
-    for (p = 0; p < 2u; p++) {
-        uint8_t *fb = planes[p];
-        uint32_t d = dx;
-        while (d >= 8u) {
-            for (y = 0; y < SCROLL_H; y++) {
-                uint8_t *r = fb + y * PLANE_W;
-                for (i = 0; i < PLANE_W - 1u; i++) r[i] = r[i + 1];
-                r[PLANE_W - 1u] = 0;
-            }
-            d -= 8u;
-        }
-        if (d) {
-            for (y = 0; y < SCROLL_H; y++) {
-                uint8_t *r = fb + y * PLANE_W;
-                uint8_t carry = 0;
-                for (i = PLANE_W; i-- > 0; ) {
-                    uint8_t b = r[i];
-                    r[i] = (uint8_t)((b << d) | carry);
-                    carry = (uint8_t)(b >> (8u - d));
-                }
-            }
-        }
-    }
-}
-
 void ui_staff_cols(uint32_t x0, uint32_t x1) {
     uint32_t l, x;
     if (x1 > 240u) x1 = 240u;

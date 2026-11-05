@@ -28,7 +28,6 @@
 /* 1-bit planes (scroll region only) */
 void ui_paper(void);                       /* full screen to paper, once */
 void ui_clear(void);                       /* wipe all planes */
-void ui_scroll_px(uint32_t dx);            /* shift all planes left by dx px */
 void ui_staff_cols(uint32_t x0, uint32_t x1); /* draw staff lines for columns [x0,x1) */
 void ui_plane_black(void);                 /* draw in black (staff, your notes) */
 void ui_plane_blue(void);                  /* draw in blue (suggested notes) */
