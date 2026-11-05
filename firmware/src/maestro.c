@@ -419,6 +419,18 @@ static void app_main(void) {
     if (sel >= NBOOK) sel = 0;
     setup_piece();
 
+    /* light the panel: transport bright, the other buttons a dim glow
+     * (so the panel reads in the dark and PLAY/HOME/REC stand out) */
+    {
+        uint32_t b;
+        for (b = 0; b < 14u; b++) {
+            if (b == (uint32_t)BTN_PLAY || b == (uint32_t)BTN_HOME || b == (uint32_t)BTN_REC)
+                fm1_led_key(b, 1);
+            else
+                fm1_led_key_glow(b, 1);
+        }
+    }
+
     render_book();
 
     for (;;) {
