@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Maestro v0.1: the screen is sheet music.
+/* Maestro: the screen is sheet music.
  *
  * Diegetic UI: the device boots into a book of pieces. Turn SELECT to flip
- * through them, PLAY to play. The staff scrolls right-to-left under a fixed
- * cursor; your played notes are drawn on the staff in green (right) or red
- * (wrong) so accuracy is visible where it happened. KNOB1 moves the cursor
- * (left = more anticipation), KNOB2 sets the scroll speed. No menus.
+ * through them, PLAY to practice, REC to record. The staff scrolls
+ * right-to-left under a fixed cursor. Blue notes are the sheet music
+ * (silent, for reading); black notes are your playing. KNOB1 moves the
+ * cursor (left = more anticipation), KNOB2 sets the scroll speed. No menus.
+ *
+ * The recording is purely spatial: each event stores its piece-x and its
+ * duration. Playback triggers an event when the playhead reaches its x,
+ * so audio and visual can never drift apart.
  */
 
 /* ---- piano voice: one wavetable cycle (sine + 2nd + 3rd harmonic) ---- */
@@ -97,13 +101,11 @@ static void app_audio(int32_t *out, uint32_t n) {
 }
 
 /* ---- pieces: the book ---- */
-/* ---- pieces: the book ---- */
 #define NPIECES 6u
 #define FREE_IDX 6u        /* book item: free play (no suggested notes) */
 #define NBOOK (NPIECES + 1u)
-static const lesson_t *pieces[NPIECES];
+static const lesson_t *pieces[NPIECES];  /* 0..4 lessons, 5 = generated drill */
 static lesson_t drill_lesson;
-static const char *drill_title = "Drill";
 static const char *free_title = "Free Play";
 
 #define PXQ 32u   /* px per quarter note: airy, classy */
@@ -154,15 +156,14 @@ static uint8_t is_free = 0;      /* free play: no suggested notes */
 static uint32_t tempo = 72u;     /* bpm: piece tempo or FREE_TEMPO */
 static const lesson_t *pl;
 
-static uint32_t play_ms;         /* playhead, ms since start */
 static uint32_t last_frame_ms;
 
-/* recording: what you played (ms, midi, on/off) */
+/* recording: what you played, as positions on the staff.
+ * on-events carry their duration (ticks); off-events stop the sound. */
 #define MAXREC 512
-static struct { uint32_t ms; uint16_t x; uint8_t midi; uint8_t on; } rec[MAXREC];
+static struct { uint16_t x; uint16_t ticks; uint8_t midi; uint8_t on; } rec[MAXREC];
 static uint16_t rec_n;
 static uint16_t pb_idx;          /* next rec event during playback */
-static uint8_t rec_on;           /* record live key events */
 
 static uint32_t indic_until;     /* speed indicator timeout */
 
@@ -174,14 +175,26 @@ static settings_t set;
 static uint8_t set_dirty = 0;
 static uint32_t cursor_x(void) { return set.cursor_x; }
 
-static uint32_t scroll_f;      /* integer scroll px */
+static uint32_t scroll_px;     /* scroll position, px */
 static uint32_t scroll_rem;      /* fractional accumulator */
 static uint32_t last_scroll;
 
 static void rec_event(uint8_t midi, uint8_t on) {
-    if (!rec_on || rec_n >= MAXREC) return;
-    rec[rec_n].ms = play_ms;
-    rec[rec_n].x = (uint16_t)(last_scroll + cursor_x());  /* absolute piece-x */
+    uint16_t x = (uint16_t)(last_scroll + cursor_x());  /* absolute piece-x */
+    uint16_t i;
+    if (rec_n >= MAXREC) return;
+    if (!on) {
+        /* close the matching open note: its duration is the x distance */
+        for (i = rec_n; i-- > 0; ) {
+            if (rec[i].on && rec[i].midi == midi && !rec[i].ticks) {
+                uint32_t t = (x > rec[i].x ? x - rec[i].x : 0) * 96u / PXQ;
+                rec[i].ticks = t < 24u ? 24u : t > 384u ? 384u : (uint16_t)t;
+                break;
+            }
+        }
+    }
+    rec[rec_n].x = x;
+    rec[rec_n].ticks = 0;  /* on: 0 = still open, set by the off; draw defaults to 96 */
     rec[rec_n].midi = midi;
     rec[rec_n].on = on;
     rec_n++;
@@ -193,29 +206,24 @@ static void draw_played(uint8_t midi) {
     ui_note(cursor_x(), midi, 96u);
 }
 
-/* recorded black notes, drawn as notation scrolling in (not popping in).
-   x was stored at record time (absolute piece-x), so alignment is exact. */
+/* true if piece-x is in the newly drawn window; sets screen x */
+static int in_window(uint32_t x, uint32_t sc, uint32_t x0, uint32_t *sx) {
+    if (x < sc) return 0;
+    *sx = x - sc;
+    if (*sx >= 240u || *sx + 48u < x0) return 0;
+    return 1;
+}
+
+/* recorded black notes, drawn as notation scrolling in (not popping in) */
 static void draw_rec_cols(uint32_t sc, uint32_t dx) {
     uint32_t x0 = dx >= 240u ? 0u : 240u - dx;
-    uint16_t i, j;
+    uint16_t i;
     ui_plane_black();
     for (i = 0; i < rec_n; i++) {
-        uint32_t sx, ticks = 96u;
+        uint32_t sx;
         if (!rec[i].on) continue;
-        if (rec[i].x < sc) continue;
-        sx = rec[i].x - sc;
-        if (sx >= 240u || sx + 48u < x0) continue;
-        /* duration from the matching note-off */
-        for (j = i + 1u; j < rec_n; j++) {
-            if (!rec[j].on && rec[j].midi == rec[i].midi) {
-                uint32_t dms = rec[j].ms > rec[i].ms ? rec[j].ms - rec[i].ms : 0;
-                ticks = (dms * tempo * 96u) / 60000u;
-                if (ticks < 24u) ticks = 24u;
-                if (ticks > 384u) ticks = 384u;
-                break;
-            }
-        }
-        ui_note(sx, rec[i].midi, ticks);
+        if (!in_window(rec[i].x, sc, x0, &sx)) continue;
+        ui_note(sx, rec[i].midi, rec[i].ticks ? rec[i].ticks : 96u);
     }
 }
 
@@ -224,43 +232,38 @@ static void draw_new_cols(uint32_t sc, uint32_t dx) {
     uint32_t x0 = dx >= 240u ? 0u : 240u - dx, i, b;
     ui_plane_black();
     ui_staff_cols(x0, 240u);
-    if (sc <= 240u) {
-        uint32_t sx = 240u - sc;
-        if (sx < 240u && sx + 48u >= x0) ui_clef(sx);
-    }
+    /* (clef is static at x=30, drawn by setup_staff) */
     if (!is_free) {
         for (b = 0; b * bar_ticks < total_ticks + bar_ticks; b++) {
-            uint32_t bx = bar_x(b), sx;
-            if (bx < sc) continue;
-            sx = bx - sc;
-            if (sx >= 240u || sx + 8u < x0) continue;
+            uint32_t sx;
+            if (!in_window(bar_x(b), sc, x0, &sx)) continue;
             ui_bar(sx);
         }
-    }
-    if (!is_free) {
         ui_plane_blue();
         for (i = 0; i < evn; i++) {
             uint32_t sx;
-            if (evx[i] < sc) continue;
-            sx = evx[i] - sc;
-            if (sx >= 240u || sx + 48u < x0) continue;
+            if (!in_window(evx[i], sc, x0, &sx)) continue;
             if (pl->events[i].is_rest) ui_rest(sx, pl->events[i].ticks);
             else ui_note(sx, pl->events[i].midi, pl->events[i].ticks);
         }
+        ui_plane_black();
     }
     /* your recorded take as black notation (if any) */
     if (rec_n > 0) draw_rec_cols(sc, dx);
-    ui_plane_black();
 }
 
 static void book_title(char *dst) {
-    const char *s;
+    const char *s = (sel == FREE_IDX) ? free_title : pieces[sel]->title;
     uint32_t i = 0;
-    if (sel == FREE_IDX) s = free_title;
-    else if (sel == 5u) s = drill_title;
-    else s = pieces[sel]->title;
     while (*s && i < 43u) dst[i++] = *s++;
     dst[i] = 0;
+}
+
+/* bare staff + clef, the static backdrop for book and play views */
+static void setup_staff(void) {
+    ui_plane_black();
+    ui_staff_cols(0u, 240u);
+    ui_clef(30u);
 }
 
 static void render_book(void) {
@@ -268,10 +271,8 @@ static void render_book(void) {
     book_title(title);
     ui_paper();
     ui_clear();
-    ui_plane_black();
-    ui_staff_cols(0u, 240u);
-    ui_clef(30u);
-    if (sel != FREE_IDX && sel != 5u) {
+    setup_staff();
+    if (sel != FREE_IDX) {
         /* show the first notes in blue */
         const lesson_t *L = pieces[sel];
         uint32_t t = 0, x;
@@ -297,9 +298,7 @@ static void render_book(void) {
 static void show_start(const char *title) {
     ui_title(title);
     ui_clear();
-    ui_plane_black();
-    ui_staff_cols(0u, 240u);
-    ui_clef(30u);
+    setup_staff();
     if (rec_n > 0) draw_rec_cols(0u, 240u);  /* black notes already on-screen */
     ui_blit();
     ui_cursor_mark(cursor_x());
@@ -307,10 +306,8 @@ static void show_start(const char *title) {
 
 /* rewind to the beginning (keep the recording) */
 static void rewind_start(void) {
-    play_ms = 0;
-    scroll_f = 0; scroll_rem = 0; last_scroll = 0;
+    scroll_px = 0; scroll_rem = 0; last_scroll = 0;
     pb_idx = 0;
-    rec_on = 0;
     show_start(is_free ? free_title : pl->title);
     ui_hint("PLAY: hear take - REC: new take");
     state = ST_READY;
@@ -323,7 +320,7 @@ static void setup_piece(void) {
         evn = 0;
         total_ticks = 0;
     } else {
-        pl = (sel == 5u) ? &drill_lesson : pieces[sel];
+        pl = pieces[sel];
         tempo = pl->tempo;
         layout_piece(pl);
     }
@@ -333,9 +330,7 @@ static void setup_piece(void) {
 /* PLAY from book: practice (blue scrolls silent, you play along) */
 static void start_play(void) {
     setup_piece();
-    play_ms = 0;
-    scroll_f = 0; scroll_rem = 0; last_scroll = 0;
-    rec_on = 0;
+    scroll_px = 0; scroll_rem = 0; last_scroll = 0;
     show_start(is_free ? free_title : pl->title);
     state = ST_PLAY;
     last_frame_ms = fm1_ms;
@@ -344,10 +339,8 @@ static void start_play(void) {
 /* REC: tape rolls from the start (erases previous take) */
 static void start_rec(void) {
     setup_piece();
-    play_ms = 0;
-    scroll_f = 0; scroll_rem = 0; last_scroll = 0;
+    scroll_px = 0; scroll_rem = 0; last_scroll = 0;
     rec_n = 0;
-    rec_on = 1;
     show_start(is_free ? free_title : pl->title);
     state = ST_REC;
     last_frame_ms = fm1_ms;
@@ -356,17 +349,16 @@ static void start_rec(void) {
 /* one frame while the playhead advances */
 static void play_frame(void) {
     uint32_t now = fm1_ms;
-    uint32_t dt, num, den, sc, dx;
+    uint32_t dt, num, den, sc, dx, play_x;
     dt = now - last_frame_ms;
     last_frame_ms = now;
-    play_ms += dt;
     /* advance scroll: 32-bit safe (dt<1000, tempo<256) */
     num = dt * tempo * PXQ * (uint32_t)SPD_N[set.speed_idx];
     den = 60000u * (uint32_t)SPD_D[set.speed_idx];
-    scroll_f += num / den;
+    scroll_px += num / den;
     scroll_rem += num % den;
-    if (scroll_rem >= den) { scroll_f += scroll_rem / den; scroll_rem %= den; }
-    sc = scroll_f;
+    if (scroll_rem >= den) { scroll_px += scroll_rem / den; scroll_rem %= den; }
+    sc = scroll_px;
     dx = sc - last_scroll;
     if (dx) {
         if (dx > 240u) dx = 240u;
@@ -374,16 +366,16 @@ static void play_frame(void) {
         draw_new_cols(sc, dx);
         last_scroll = sc;
     }
+    play_x = sc + cursor_x();  /* where the playhead sits on the staff */
     if (state == ST_PLAYBACK) {
-        /* black notes perform: sound them as the playhead passes.
-           They're already on the staff (drawn by draw_rec_cols), no popping in. */
-        while (pb_idx < rec_n && rec[pb_idx].ms <= play_ms) {
+        /* black notes perform: sound them as the playhead reaches them */
+        while (pb_idx < rec_n && rec[pb_idx].x <= play_x) {
             uint8_t midi = rec[pb_idx].midi;
             if (rec[pb_idx].on) piano_on(midi, 100);
             else piano_off(midi);
             pb_idx++;
         }
-        if (pb_idx >= rec_n && rec_n && play_ms > rec[rec_n - 1u].ms + 2000u) {
+        if (pb_idx >= rec_n && rec_n && play_x > rec[rec_n - 1u].x + 100u) {
             pause_resume = ST_PLAYBACK;
             state = ST_PAUSE;
             return;
@@ -425,10 +417,9 @@ static void app_main(void) {
         dp.bars = 4; dp.beats_per_bar = 4;
         dp.rhythm_mask = RHY_Q | RHY_H | RHY_E;
         dp.allow_rests = 1; dp.seed = 7;
-        for (i = 0; i < LESSON_TITLE_LEN; i++) drill_lesson.title[i] = 0;
-        drill_lesson.title[0] = 'D'; drill_lesson.title[1] = 'r';
-        drill_lesson.title[2] = 'i'; drill_lesson.title[3] = 'l';
-        drill_lesson.title[4] = 'l'; drill_lesson.title[5] = 0;
+        { const char *t = "Drill";
+          for (i = 0; t[i]; i++) drill_lesson.title[i] = t[i];
+          drill_lesson.title[i] = 0; }
         drill_lesson.level = 2; drill_lesson.tempo = 96;
         drill_lesson.event_count = drill_generate(&dp, drill_lesson.events, LESSON_MAX_EVENTS);
         pieces[5] = &drill_lesson;
@@ -486,7 +477,6 @@ static void app_main(void) {
             } else if (state == ST_READY) {
                 if (rec_n > 0) {  /* PLAY: hear the take */
                     pb_idx = 0;
-                    rec_on = 0;
                     state = ST_PLAYBACK;
                     last_frame_ms = fm1_ms;
                 }
