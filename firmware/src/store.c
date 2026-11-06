@@ -15,7 +15,7 @@ static uint32_t mset_crc32(const uint8_t *p, uint32_t n) {
 
 void mset_load(settings_t *s) {
         s->magic = 0;
-    s->cursor_x = 60;
+    s->reserved = 0;
     s->speed_idx = 2;
     s->level = 2;
     s->sel = 0;
@@ -32,7 +32,6 @@ void mset_load(settings_t *s) {
             for (k = 0; k < sizeof tmp; k++) d[k] = buf[k];
             if (tmp.magic != SET_MAGIC) return;
             *s = tmp;
-            if (s->cursor_x < 30u || s->cursor_x > 180u) s->cursor_x = 60;
             if (s->speed_idx > 4u) s->speed_idx = 2;
             if (s->level > 5u) s->level = 2;
             if (s->sel > 6u) s->sel = 0;

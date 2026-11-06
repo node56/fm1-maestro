@@ -223,8 +223,23 @@ static void overlay_text(uint32_t x, uint32_t y, const char *s,
 void ui_title(const char *s) {
     overlay_text(8u, TITLE_Y, s, &FONT_S, 16u);
 }
-void ui_indic(const char *s) {
-    overlay_text(196u, 224u, s, &FONT_S, 16u);
+/* decimal, no libc dependency (the host build doesn't get libc.c). */
+static void u32_str(char *b, uint32_t v) {
+    char t[12];
+    uint32_t n = 0, i;
+    do { t[n++] = (char)('0' + v % 10u); v /= 10u; } while (v);
+    for (i = 0; i < n; i++) b[i] = t[n - 1 - i];
+    b[n] = 0;
+}
+
+/* persistent tempo readout: "72 BPM" at the bottom right. */
+void ui_tempo(uint32_t bpm) {
+    char b[12];
+    uint32_t i = 0;
+    u32_str(b, bpm);
+    while (b[i]) i++;
+    b[i++] = ' '; b[i++] = 'B'; b[i++] = 'P'; b[i++] = 'M'; b[i] = 0;
+    overlay_text(180u, 224u, b, &FONT_S, 16u);
 }
 void ui_hint(const char *s) {
     overlay_text(8u, 224u, s, &FONT_S, 16u);

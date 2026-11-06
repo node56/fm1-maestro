@@ -6,7 +6,7 @@
 
 typedef struct {
     uint32_t magic;
-    uint8_t cursor_x;     /* 30..180 */
+    uint8_t reserved;     /* was cursor_x; the playhead is fixed now */
     uint8_t speed_idx;    /* 0..4 -> 0.5x..2x */
     uint8_t level;        /* drill difficulty 0..5 */
     uint8_t sel;          /* book selection */

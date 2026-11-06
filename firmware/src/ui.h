@@ -47,7 +47,7 @@ void ui_blit(void);
 
 /* text / cursor, drawn on the LCD after the blit */
 void ui_title(const char *s);
-void ui_indic(const char *s);
+void ui_tempo(uint32_t bpm);            /* persistent BPM readout, bottom right */
 void ui_hint(const char *s);
 void ui_cursor_mark(uint32_t x);           /* amber playhead below the staff */
 

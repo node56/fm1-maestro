@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Maestro: the screen is sheet music, the buttons are a tape recorder.
+/* Maestro: a groovebox that teaches you to read sheet music.
+ * The screen is sheet music, the buttons are a tape recorder.
  *
  * PLAY starts the tape moving. REC starts it moving and stores what you
  * play, with the erase head on: the playhead wipes the old take where it
@@ -9,7 +10,11 @@
  * in. PLAY or the active record button while moving stops the tape.
  * HOME rewinds to the start; HOME at the start goes back to the book.
  * ARP toggles looping at the end; SAVE marks the end of a free-play take.
- * KNOB2 is speed while moving, a scrub knob while stopped.
+ *
+ * The playhead is fixed (no knob moves it); the sheet scrolls under it.
+ * KNOB1 is tempo (40-200 BPM, 2 per click): record slow, crank it up
+ * for playback. The BPM shows at the bottom right, always. KNOB2 is a
+ * speed multiplier while moving, a scrub knob while stopped.
  *
  * The panel lights follow the state: PLAY bright while playing, REC
  * bright while tape-recording, SEQ bright while punch-recording, ARP
@@ -21,9 +26,11 @@
  * they just set the tape moving and whether notes are stored.
  *
  * Blue notes are the sheet music (silent, for reading). Black notes are
- * your take. The piece ends at a final double bar; ARP loops back to the
- * start there. A score is a program: the end bar is Fine, the loop is a
- * jump to the start, and the playhead is the program counter.
+ * your take. The take is spatial (positions, not times), so it plays back
+ * at whatever tempo you set. The piece ends at a final double bar; ARP
+ * loops back to the start there. A score is a program: the end bar is
+ * Fine, the loop is a jump to the start, and the playhead is the
+ * program counter.
  */
 
 #include "piano_data.c"   /* sampled piano (see file header for license) */
@@ -190,19 +197,32 @@ static uint32_t free_end_x = 0;  /* piece-x of the marked end (free play) */
 static uint32_t tempo = 72u;
 static const lesson_t *pl;
 
+#define CURSOR_X 60u   /* the playhead is fixed; the sheet scrolls under it */
+#define TEMPO_MIN 40u
+#define TEMPO_MAX 200u
+#define TEMPO_STEP 2u    /* BPM per KNOB1 click */
+
 static uint32_t scroll_px;     /* tape position */
 static uint32_t scroll_frac;   /* fractional scroll accumulator */
 static uint32_t last_frame_ms;
-static uint32_t indic_until;
+static uint32_t shown_bpm = 0; /* last BPM drawn (0 = none yet) */
 
 static const int32_t SPD_N[5] = {1, 3, 4, 6, 8};
 static const int32_t SPD_D[5] = {2, 4, 4, 4, 4};
-static const char *SPD_S[5] = {"0.5x", "0.75x", "1x", "1.5x", "2x"};
 
 static settings_t set;
 static uint8_t set_dirty = 0;
-static uint32_t cursor_x(void) { return set.cursor_x; }
-static uint32_t play_x(void) { return scroll_px + cursor_x(); }  /* playhead piece-x */
+static uint32_t play_x(void) { return scroll_px + CURSOR_X; }  /* playhead piece-x */
+
+/* the tempo on screen, always: the effective BPM (base x speed multiplier).
+ * Redraws only when it changes (the LCD persists between frames). */
+static void show_tempo(void) {
+    uint32_t bpm = (tempo * (uint32_t)SPD_N[set.speed_idx]) / (uint32_t)SPD_D[set.speed_idx];
+    if (bpm != shown_bpm) {
+        shown_bpm = bpm;
+        ui_tempo(bpm);
+    }
+}
 
 /* ---- the take: notes, sorted by x ---- */
 #define MAXREC 512
@@ -303,7 +323,7 @@ static void render_window(uint32_t sc) {
         ui_note(sx, rec[i].midi, rec[i].ticks ? rec[i].ticks : 96u);
     }
     ui_blit();
-    ui_cursor_mark(cursor_x());
+    ui_cursor_mark(CURSOR_X);
 }
 
 static void book_title(char *dst) {
@@ -319,20 +339,27 @@ static void render_book(void) {
     ui_paper();
     render_window(0u);
     ui_title(title);
-    ui_hint("SELECT flip - PLAY start");
+    ui_hint("SELECT flip PLAY start");
+    shown_bpm = 0;
+    show_tempo();
 }
 
 static void setup_piece(void) {
     is_free = (sel == FREE_IDX);
     if (is_free) {
-        tempo = FREE_TEMPO;
         evn = 0;
         total_ticks = 0;
     } else {
         pl = pieces[sel];
-        tempo = pl->tempo;
         layout_piece(pl);
     }
+}
+/* picking a piece (fresh): lay it out and reset the tempo to the piece's.
+ * PLAY/REC/HOME use setup_piece() alone, so a tempo you dialed in with
+ * KNOB1 survives starting the tape. */
+static void select_piece(void) {
+    setup_piece();
+    tempo = is_free ? FREE_TEMPO : pl->tempo;
 }
 
 /* ---- transport ---- */
@@ -370,7 +397,7 @@ static void leds_update(void) {
 static void tape_stop(void) {
     silence_playback();
     state = ST_STOP;
-    ui_hint("PLAY resume - REC tape - SEQ");
+    ui_hint("PLAY go REC tape SEQ");
 }
 
 /* start moving; black notes sound as the playhead reaches them */
@@ -380,7 +407,7 @@ static void tape_play(void) {
     n_sounding = 0;
     state = ST_PLAY;
     last_frame_ms = fm1_ms;
-    ui_hint("PLAY stop - REC in - SEQ in");
+    ui_hint("PLAY stop - REC/SEQ in");
 }
 
 /* start moving and storing. erase=1 (REC): the erase head wipes the old
@@ -392,7 +419,7 @@ static void tape_rec(uint8_t erase) {
     while (erase_idx < rec_n && rec[erase_idx].x < play_x()) erase_idx++;
     state = ST_REC;
     last_frame_ms = fm1_ms;
-    ui_hint(erase ? "REC stop - PLAY punch out" : "SEQ stop - PLAY punch out");
+    ui_hint(erase ? "REC stop PLAY out" : "SEQ stop PLAY out");
 }
 
 /* loop back to the start (the end bar is a jump, not a stop) */
@@ -476,8 +503,7 @@ static void play_frame(void) {
         }
     }
     render_window(scroll_px);
-    if ((int32_t)(now - indic_until) < 0)
-        ui_indic(SPD_S[set.speed_idx]);
+    show_tempo();
 }
 
 /* live key press. REC: punch in. Otherwise: sounds only. */
@@ -514,7 +540,7 @@ static void app_main(void) {
     }
     mset_load(&set);
     if (sel >= NBOOK) sel = 0;
-    setup_piece();
+    select_piece();
 
     leds_update();  /* the panel lights follow the state */
     render_book();
@@ -531,19 +557,19 @@ static void app_main(void) {
             sel = (uint8_t)(s % NBOOK);
             rec_n = 0;  /* new piece, new tape */
             free_end_set = 0; free_end_x = 0;
-            setup_piece();
+            select_piece();
             render_book();
             set_dirty = 1;
         }
         e = fm1_enc_take(ENC_KNOB1);
         if (e) {
-            int32_t c = (int32_t)set.cursor_x + e * 3;
-            if (c < 30) c = 30; if (c > 180) c = 180;
-            if (c != (int32_t)set.cursor_x) {
-                set.cursor_x = (uint8_t)c; set_dirty = 1;
-                if (state == ST_BOOK || state == ST_STOP) {
-                    render_window(state == ST_BOOK ? 0u : scroll_px);
-                }
+            /* tempo: record slow, crank it up for playback */
+            int32_t t = (int32_t)tempo + e * (int32_t)TEMPO_STEP;
+            if (t < (int32_t)TEMPO_MIN) t = (int32_t)TEMPO_MIN;
+            if (t > (int32_t)TEMPO_MAX) t = (int32_t)TEMPO_MAX;
+            if (t != (int32_t)tempo) {
+                tempo = (uint32_t)t;
+                show_tempo();
             }
         }
         e = fm1_enc_take(ENC_KNOB2);
@@ -559,7 +585,7 @@ static void app_main(void) {
                 if (s < 0) s = 0; if (s > 4) s = 4;
                 if (s != (int32_t)set.speed_idx) {
                     set.speed_idx = (uint8_t)s; set_dirty = 1;
-                    indic_until = fm1_ms + 1200u;
+                    show_tempo();
                 }
             }
         }
