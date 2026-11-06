@@ -20,6 +20,11 @@
  * KNOB1 is tempo (40-200 BPM, 2 per click): record slow, crank it up
  * for playback. The BPM shows at the bottom right, always. KNOB4 moves
  * the sheet (scrub) while stopped. KNOB2 and KNOB3 do nothing yet.
+ * OCT+ / OCT- transpose the keyboard by an octave per press (-2..+2):
+ * what you play and record shifts, the blue score does not. The OCT
+ * button lights in the direction you shifted, and the shift shows at
+ * the top right. A shifted note still sounds; only notes in the
+ * visible staff range (about E4-B5) draw on the sheet.
  *
  * The panel lights follow the state: PLAY bright while playing, REC or
  * SEQ bright while recording (whichever started it), ARP bright while
@@ -196,6 +201,27 @@ static void layout_piece(const lesson_t *L) {
 static uint8_t state = ST_BOOK;
 static uint8_t sel = 0;
 static uint8_t is_free = 0;
+#define OCT_MIN (-2)
+#define OCT_MAX 2
+static int8_t oct_shift = 0;   /* keyboard octave shift, session only */
+static uint8_t held_midi[27];  /* MIDI each held key was pressed at (octave may move) */
+
+/* the MIDI a physical key plays, with the octave shift (clamped 0..127) */
+static uint8_t key_midi(uint32_t k) {
+    int32_t m = (int32_t)(53u + k) + (int32_t)oct_shift * 12;
+    if (m < 0) m = 0;
+    if (m > 127) m = 127;
+    return (uint8_t)m;
+}
+
+static int8_t shown_oct = 99;  /* sentinel: force the first octave draw */
+static void show_oct(void) {
+    if (oct_shift != shown_oct) {
+        shown_oct = oct_shift;
+        ui_oct(oct_shift);
+    }
+}
+
 static uint8_t loop_on = 0;      /* ARP: loop back to the start at the end */
 static uint8_t free_end_set = 0; /* SAVE: a free-play take has a marked end */
 static uint32_t free_end_x = 0;  /* piece-x of the marked end (free play) */
@@ -340,6 +366,8 @@ static void render_book(void) {
     ui_hint("SELECT flip PLAY start");
     shown_bpm = 0;
     show_tempo();
+    shown_oct = 99;
+    show_oct();
 }
 
 static void setup_piece(void) {
@@ -384,6 +412,8 @@ static void leds_update(void) {
         else if (b == (uint32_t)BTN_PLAY) bright = (state == ST_PLAY);
         else if (b == (uint32_t)BTN_REC) bright = (state == ST_REC && !rec_via_seq);
         else if (b == (uint32_t)BTN_SEQ) bright = (state == ST_REC && rec_via_seq);
+        else if (b == (uint32_t)BTN_OCT_UP) bright = (oct_shift > 0);
+        else if (b == (uint32_t)BTN_OCT_DOWN) bright = (oct_shift < 0);
         else if (b == (uint32_t)BTN_ARP) bright = loop_on;
         else if (b == (uint32_t)BTN_SAVE) bright = (is_free && free_end_set);
         if (bright) { fm1_led_key(b, 1); fm1_led_key_glow(b, 0); }
@@ -606,6 +636,12 @@ static void app_main(void) {
                 tape_stop();
             }
         }
+        if (b & (1u << BTN_OCT_UP)) {
+            if (oct_shift < OCT_MAX) { oct_shift++; show_oct(); }
+        }
+        if (b & (1u << BTN_OCT_DOWN)) {
+            if (oct_shift > OCT_MIN) { oct_shift--; show_oct(); }
+        }
         if (b & (1u << BTN_ARP)) {
             loop_on = !loop_on;  /* loop at the end bar */
         }
@@ -643,7 +679,8 @@ static void app_main(void) {
             prev_keys = keys;
             for (k = 0; k < 27u; k++)
                 if (ed >> k & 1u) {
-                    uint8_t midi = (uint8_t)(53u + k);
+                    uint8_t midi = key_midi(k);
+                    held_midi[k] = midi;
                     piano_on(midi, 100);
                     midi_send(0x90u, midi, 100);
                     on_key(midi);
@@ -655,7 +692,7 @@ static void app_main(void) {
             sounding_keys = keys;
             for (k = 0; k < 27u; k++)
                 if (off >> k & 1u) {
-                    uint8_t midi = (uint8_t)(53u + k);
+                    uint8_t midi = held_midi[k];
                     piano_off(midi);
                     midi_send(0x80u, midi, 0);
                     on_key_up(midi);

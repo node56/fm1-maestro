@@ -232,6 +232,19 @@ static void u32_str(char *b, uint32_t v) {
     b[n] = 0;
 }
 
+/* octave shift, top right: "+1", "-1", "+2", "-2", or blank.
+ * Always two characters wide, so redrawing fully repaints the old text. */
+void ui_oct(int32_t shift) {
+    char b[3];
+    if (shift == 0) { b[0] = ' '; b[1] = ' '; }
+    else {
+        b[0] = (shift > 0) ? '+' : '-';
+        b[1] = (char)('0' + (shift > 0 ? shift : -shift));
+    }
+    b[2] = 0;
+    overlay_text(220u, TITLE_Y, b, &FONT_S, 16u);
+}
+
 /* persistent tempo readout: "72 BPM" at the bottom right. */
 void ui_tempo(uint32_t bpm) {
     char b[12];
