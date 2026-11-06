@@ -2,24 +2,29 @@
 /* Maestro: a groovebox that teaches you to read sheet music.
  * The screen is sheet music, the buttons are a tape recorder.
  *
- * PLAY starts the tape moving. REC starts it moving and stores what you
- * play, with the erase head on: the playhead wipes the old take where it
- * passes. SEQ is the same recorder with the erase head off (punch in:
- * only same-pitch notes at the playhead are replaced). PLAY during REC
- * punches out (keeps moving, stops storing); REC/SEQ during PLAY punch
- * in. PLAY or the active record button while moving stops the tape.
- * HOME rewinds to the start; HOME at the start goes back to the book.
- * ARP toggles looping at the end; SAVE marks the end of a free-play take.
+ * PLAY starts the tape moving. REC/SEQ start it moving and store what
+ * you play. PLAY during REC punches out (keeps moving, stops storing);
+ * REC/SEQ during PLAY punch in. PLAY or the active record button while
+ * moving stops the tape. HOME rewinds to the start; HOME at the start
+ * goes back to the book. ARP toggles looping at the end; SAVE marks the
+ * end of a free-play take.
+ *
+ * Recording always adds (overdub). There is no erase head: the loop
+ * never wipes what you played, it just comes around again and you add
+ * more on top. A note you replay replaces the same pitch nearby, so
+ * you can fix a note without stacking duplicates. The take is a set of
+ * layers (one per recording pass); for now they are always all added
+ * and all shown, like a drawing with every layer visible.
  *
  * The playhead is fixed (no knob moves it); the sheet scrolls under it.
  * KNOB1 is tempo (40-200 BPM, 2 per click): record slow, crank it up
- * for playback. The BPM shows at the bottom right, always. KNOB2 is a
- * speed multiplier while moving, a scrub knob while stopped.
+ * for playback. The BPM shows at the bottom right, always. KNOB4 moves
+ * the sheet (scrub) while stopped. KNOB2 and KNOB3 do nothing yet.
  *
- * The panel lights follow the state: PLAY bright while playing, REC
- * bright while tape-recording, SEQ bright while punch-recording, ARP
- * bright while looping, SAVE bright once a free-play end is marked,
- * HOME bright always; the rest sit at a dim glow.
+ * The panel lights follow the state: PLAY bright while playing, REC or
+ * SEQ bright while recording (whichever started it), ARP bright while
+ * looping, SAVE bright once a free-play end is marked, HOME bright
+ * always; the rest sit at a dim glow.
  *
  * Rendering is positional: render_window(sc) draws whatever is at scroll
  * position sc, forward or backward. Nothing is ever "reset" on PLAY/REC;
@@ -207,31 +212,25 @@ static uint32_t scroll_frac;   /* fractional scroll accumulator */
 static uint32_t last_frame_ms;
 static uint32_t shown_bpm = 0; /* last BPM drawn (0 = none yet) */
 
-static const int32_t SPD_N[5] = {1, 3, 4, 6, 8};
-static const int32_t SPD_D[5] = {2, 4, 4, 4, 4};
-
-static settings_t set;
+static settings_t set;  /* speed_idx kept in the blob, unused now */
 static uint8_t set_dirty = 0;
 static uint32_t play_x(void) { return scroll_px + CURSOR_X; }  /* playhead piece-x */
 
-/* the tempo on screen, always: the effective BPM (base x speed multiplier).
- * Redraws only when it changes (the LCD persists between frames). */
+/* the tempo on screen, always. Redraws only when it changes
+ * (the LCD persists between frames). */
 static void show_tempo(void) {
-    uint32_t bpm = (tempo * (uint32_t)SPD_N[set.speed_idx]) / (uint32_t)SPD_D[set.speed_idx];
-    if (bpm != shown_bpm) {
-        shown_bpm = bpm;
-        ui_tempo(bpm);
+    if (tempo != shown_bpm) {
+        shown_bpm = tempo;
+        ui_tempo(tempo);
     }
 }
 
 /* ---- the take: notes, sorted by x ---- */
 #define MAXREC 512
-#define PUNCH_W 8u   /* overwrite same-pitch notes within this many px */
-static struct { uint16_t x; uint16_t ticks; uint8_t midi; uint16_t pass; } rec[MAXREC];
+#define PUNCH_W 8u   /* replaying a pitch replaces it nearby (fix, don't stack) */
+static struct { uint16_t x; uint16_t ticks; uint8_t midi; } rec[MAXREC];
 static uint16_t rec_n;
-static uint8_t rec_erase = 1;  /* REC: erase head on (tape); SEQ: off (punch) */
-static uint16_t rec_pass = 0;  /* recording epoch; the erase head spares this pass */
-static uint16_t erase_idx = 0; /* first take note the erase head hasn't passed */
+static uint8_t rec_via_seq = 0;  /* which record button started this take */
 
 /* playback: next note to start, and notes currently sounding */
 static uint16_t pb_idx;
@@ -254,7 +253,6 @@ static void rec_note_on(uint8_t midi) {
     rec[i].x = x;
     rec[i].ticks = 0;  /* open; closed by the note-off */
     rec[i].midi = midi;
-    rec[i].pass = rec_pass;
     rec_n++;
 }
 static void rec_note_off(uint8_t midi) {
@@ -384,8 +382,8 @@ static void leds_update(void) {
         uint8_t bright = 0;
         if (b == (uint32_t)BTN_HOME) bright = 1;
         else if (b == (uint32_t)BTN_PLAY) bright = (state == ST_PLAY);
-        else if (b == (uint32_t)BTN_REC) bright = (state == ST_REC && rec_erase);
-        else if (b == (uint32_t)BTN_SEQ) bright = (state == ST_REC && !rec_erase);
+        else if (b == (uint32_t)BTN_REC) bright = (state == ST_REC && !rec_via_seq);
+        else if (b == (uint32_t)BTN_SEQ) bright = (state == ST_REC && rec_via_seq);
         else if (b == (uint32_t)BTN_ARP) bright = loop_on;
         else if (b == (uint32_t)BTN_SAVE) bright = (is_free && free_end_set);
         if (bright) { fm1_led_key(b, 1); fm1_led_key_glow(b, 0); }
@@ -397,7 +395,7 @@ static void leds_update(void) {
 static void tape_stop(void) {
     silence_playback();
     state = ST_STOP;
-    ui_hint("PLAY go REC tape SEQ");
+    ui_hint("PLAY go REC add SEQ");
 }
 
 /* start moving; black notes sound as the playhead reaches them */
@@ -410,27 +408,21 @@ static void tape_play(void) {
     ui_hint("PLAY stop - REC/SEQ in");
 }
 
-/* start moving and storing. erase=1 (REC): the erase head wipes the old
- * take where the playhead passes. erase=0 (SEQ): punch in, no erase. */
-static void tape_rec(uint8_t erase) {
-    rec_erase = erase;
-    rec_pass++;
-    erase_idx = 0;
-    while (erase_idx < rec_n && rec[erase_idx].x < play_x()) erase_idx++;
+/* start moving and storing. Recording always adds: the loop never wipes
+ * what you played, it just comes around again and you add more on top. */
+static void tape_rec(uint8_t via_seq) {
+    rec_via_seq = via_seq;
     state = ST_REC;
     last_frame_ms = fm1_ms;
-    ui_hint(erase ? "REC stop PLAY out" : "SEQ stop PLAY out");
+    ui_hint(via_seq ? "SEQ stop PLAY out" : "REC stop PLAY out");
 }
 
-/* loop back to the start (the end bar is a jump, not a stop) */
+/* loop back to the start (the end bar is a jump, not a stop).
+ * Nothing is erased: the take survives the wrap and you keep adding. */
 static void loop_wrap(void) {
     silence_playback();
     scroll_px = 0; scroll_frac = 0;
     pb_idx = 0;
-    if (state == ST_REC) {
-        rec_pass++;      /* a new loop iteration is a new pass */
-        erase_idx = 0;   /* the head restarts at the very beginning */
-    }
 }
 
 /* one frame while the tape moves */
@@ -440,23 +432,12 @@ static void play_frame(void) {
     dt = now - last_frame_ms;
     last_frame_ms = now;
     /* advance scroll: 32-bit safe (dt<1000, tempo<256) */
-    num = dt * tempo * PXQ * (uint32_t)SPD_N[set.speed_idx];
-    den = 60000u * (uint32_t)SPD_D[set.speed_idx];
+    num = dt * tempo * PXQ;
+    den = 60000u;
     scroll_px += num / den;
     scroll_frac += num % den;
     if (scroll_frac >= den) { scroll_px += scroll_frac / den; scroll_frac %= den; }
     px = play_x();
-    if (state == ST_REC && rec_erase) {
-        /* erase head: wipe the old take where the playhead has passed.
-         * Notes from this pass are spared, so what you just played stays. */
-        while (erase_idx < rec_n && rec[erase_idx].x < px) {
-            if (rec[erase_idx].pass != rec_pass) {
-                uint16_t j;
-                for (j = erase_idx; j + 1u < rec_n; j++) rec[j] = rec[j + 1u];
-                rec_n--;
-            } else erase_idx++;
-        }
-    }
     if (state == ST_PLAY) {
         /* sound black notes as the playhead reaches them */
         while (pb_idx < rec_n && rec[pb_idx].x <= px) {
@@ -572,23 +553,15 @@ static void app_main(void) {
                 show_tempo();
             }
         }
-        e = fm1_enc_take(ENC_KNOB2);
-        if (e) {
-            if (state == ST_STOP) {
-                /* scrub the tape */
-                int32_t s = (int32_t)scroll_px + e * 4;
-                if (s < 0) s = 0;
-                scroll_px = (uint32_t)s;
-                render_window(scroll_px);
-            } else {
-                int32_t s = (int32_t)set.speed_idx + e;
-                if (s < 0) s = 0; if (s > 4) s = 4;
-                if (s != (int32_t)set.speed_idx) {
-                    set.speed_idx = (uint8_t)s; set_dirty = 1;
-                    show_tempo();
-                }
-            }
+        e = fm1_enc_take(ENC_KNOB4);
+        if (e && state == ST_STOP) {
+            /* KNOB4 moves the sheet (scrub the tape) */
+            int32_t s = (int32_t)scroll_px + e * 4;
+            if (s < 0) s = 0;
+            scroll_px = (uint32_t)s;
+            render_window(scroll_px);
         }
+        /* KNOB2 and KNOB3 do nothing yet. */
 
         { uint32_t rel_; b = fm1_input_edges(&rel_); }
         if (b & (1u << BTN_PLAY)) {
@@ -610,11 +583,11 @@ static void app_main(void) {
                 setup_piece();
                 scroll_px = 0; scroll_frac = 0;
                 render_window(0u);
-                tape_rec(1);  /* tape: erase head on */
+                tape_rec(0);
             } else if (state == ST_STOP) {
-                tape_rec(1);
+                tape_rec(0);
             } else if (state == ST_PLAY) {
-                tape_rec(1);  /* punch in, keep moving */
+                tape_rec(0);  /* punch in, keep moving */
             } else if (state == ST_REC) {
                 tape_stop();
             }
@@ -624,11 +597,11 @@ static void app_main(void) {
                 setup_piece();
                 scroll_px = 0; scroll_frac = 0;
                 render_window(0u);
-                tape_rec(0);  /* punch in: erase head off */
+                tape_rec(1);
             } else if (state == ST_STOP) {
-                tape_rec(0);
+                tape_rec(1);
             } else if (state == ST_PLAY) {
-                tape_rec(0);  /* punch in, keep moving */
+                tape_rec(1);  /* punch in, keep moving */
             } else if (state == ST_REC) {
                 tape_stop();
             }
