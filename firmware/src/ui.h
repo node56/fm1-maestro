@@ -33,13 +33,14 @@ void ui_plane_black(void);                 /* draw in black (staff, your notes) 
 void ui_plane_blue(void);                  /* draw in blue (suggested notes) */
 
 /* notation, drawn at absolute buffer x into the selected plane. */
-int32_t ui_dia(int32_t midi);              /* diatonic steps, E5 == 37 */
+int32_t ui_dia(int32_t midi);              /* diatonic steps, E4 == 37 */
 uint32_t ui_y_of(int32_t dia);             /* buffer y for a diatonic step */
 void ui_note(uint32_t x, int32_t midi, uint32_t ticks);
 void ui_rest(uint32_t x, uint32_t ticks);
 void ui_bar(uint32_t x);                   /* bar line across the staff */
 void ui_endbar(uint32_t x);                /* final double bar (thin + thick) */
-void ui_clef(int32_t x);                   /* treble clef (Bravura glyph); x may be negative */
+void ui_set_clef(int32_t bass);            /* 0 = treble (G clef), 1 = bass (F clef) */
+void ui_clef(int32_t x);                   /* the clef (Bravura glyph); x may be negative */
 void ui_accidental(int32_t x, uint32_t y, uint32_t kind); /* 0=sharp 1=flat 2=natural */
 
 /* push the planes to the LCD (composited) */

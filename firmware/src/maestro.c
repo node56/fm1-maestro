@@ -24,7 +24,10 @@
  * what you play and record shifts, the blue score does not. The OCT
  * button lights in the direction you shifted, and the shift shows at
  * the top right. A shifted note still sounds; only notes in the
- * visible staff range (about E4-B5) draw on the sheet.
+ * visible staff range (about E4-B5) draw on the sheet. The clef
+ * follows the octave: shift down and the staff becomes a bass staff
+ * (F clef -- the notes you play are in the bass range); shift back up
+ * and it returns to treble.
  *
  * The panel lights follow the state: PLAY bright while playing, REC or
  * SEQ bright while recording (whichever started it), ARP bright while
@@ -222,6 +225,7 @@ static void show_oct(void) {
     }
 }
 
+
 static uint8_t loop_on = 0;      /* ARP: loop back to the start at the end */
 static uint8_t free_end_set = 0; /* SAVE: a free-play take has a marked end */
 static uint32_t free_end_x = 0;  /* piece-x of the marked end (free play) */
@@ -302,14 +306,16 @@ static void render_window(uint32_t sc) {
     ui_clear();
     ui_plane_black();
     ui_staff_cols(0u, 240u);
-    if (!is_free) {
+    /* the symbol list is the source of truth: in free play it holds only
+     * the clef, in a book piece the clef, bars, notes and final bar. */
+    {
         for (i = 0; i < psym_n; i++) {
             int32_t sx = (int32_t)psym[i].x - (int32_t)sc;
             if (sx >= 240) continue;
             switch (psym[i].type) {
             case SYM_CLEF:
                 ui_plane_black();
-                if (sx + (int32_t)GCLEF_W > 0) ui_clef(sx);
+                if (sx + (int32_t)FCLEF_W > 0) ui_clef(sx);  /* FCLEF is the wider clef */
                 break;
             case SYM_BAR:
                 if (sx < 0) break;
@@ -370,11 +376,25 @@ static void render_book(void) {
     show_oct();
 }
 
+/* The clef follows the octave: shift down and the staff becomes a bass
+ * staff (the notes you play are in the bass range), shift back up and
+ * it returns to treble. Re-renders so the staff and notes move now. */
+static void apply_octave(void) {
+    ui_set_clef(oct_shift < 0);
+    show_oct();
+    if (state == ST_BOOK) render_book();
+    else render_window(scroll_px);
+}
+
 static void setup_piece(void) {
     is_free = (sel == FREE_IDX);
     if (is_free) {
         evn = 0;
         total_ticks = 0;
+        /* free play has no lesson, but the staff still gets a clef --
+         * it is the symbol that shows which clef the staff is in. */
+        psym_n = 0;
+        psym[psym_n].x = CLEF_X; psym[psym_n].type = SYM_CLEF; psym_n++;
     } else {
         pl = pieces[sel];
         layout_piece(pl);
@@ -637,10 +657,10 @@ static void app_main(void) {
             }
         }
         if (b & (1u << BTN_OCT_UP)) {
-            if (oct_shift < OCT_MAX) { oct_shift++; show_oct(); }
+            if (oct_shift < OCT_MAX) { oct_shift++; apply_octave(); }
         }
         if (b & (1u << BTN_OCT_DOWN)) {
-            if (oct_shift > OCT_MIN) { oct_shift--; show_oct(); }
+            if (oct_shift > OCT_MIN) { oct_shift--; apply_octave(); }
         }
         if (b & (1u << BTN_ARP)) {
             loop_on = !loop_on;  /* loop at the end bar */

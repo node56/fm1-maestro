@@ -54,22 +54,35 @@ void ui_staff_cols(uint32_t x0, uint32_t x1) {
     }
 }
 
-/* diatonic steps; our convention C5 == MIDI 60, E5 (bottom line) == 37 */
+/* diatonic steps; our convention C5 == MIDI 60, E4 (bottom line) == 37 */
 int32_t ui_dia(int32_t midi) {
     static const int8_t L[12] = {0,-1,1,-1,2,3,-1,4,-1,5,-1,6};
     int32_t letter = L[midi % 12];
     if (letter < 0) letter = L[(midi - 1) % 12];
     return (midi / 12) * 7 + letter;
 }
+
+/* Clef: the staff's bottom line is dia clef_base -- E4 (37) in treble,
+ * G2 (25) in bass. Changing it re-maps the whole staff (notes, ledgers,
+ * clef glyph) without touching the symbol list. */
+static int32_t clef_base = 37;   /* treble: bottom line E4 */
+static uint8_t bass_clef = 0;    /* 1 = bass clef (F clef) */
+
+/* 0 = treble (G clef), 1 = bass (F clef). */
+void ui_set_clef(int32_t bass) {
+    bass_clef = bass ? 1u : 0u;
+    clef_base = bass_clef ? 25 : 37;
+}
+
 uint32_t ui_y_of(int32_t dia) {
-    return STAFF_BOT - (uint32_t)((dia - 37) * (int32_t)(STAFF_SPC / 2));
+    return STAFF_BOT - (uint32_t)((dia - clef_base) * (int32_t)(STAFF_SPC / 2));
 }
 
 static void ledgers(uint32_t x, int32_t dia) {
     int32_t dd;
-    for (dd = 35; dd >= dia && dd >= 31; dd -= 2)
+    for (dd = clef_base - 2; dd >= dia && dd >= clef_base - 8; dd -= 2)
         hline(x - 11u, x + 12u, ui_y_of(dd));
-    for (dd = 47; dd <= dia; dd += 2)
+    for (dd = clef_base + 10; dd <= dia; dd += 2)
         hline(x - 11u, x + 12u, ui_y_of(dd));
 }
 
@@ -168,11 +181,16 @@ static void glyph_blit(int32_t x0, uint32_t y0,
                 px((uint32_t)(x0 + (int32_t)x), y0 + y);
 }
 
-/* treble clef from Bravura (see glyphs.h). Spiral centers on the G line.
+/* The clef (Bravura glyph). G clef in treble (spiral centers on the G
+ * line), F clef in bass (the dots straddle the F line, dia 31).
  * x is the screen position of the glyph's left edge (may be negative). */
 void ui_clef(int32_t x) {
-    glyph_blit(x, STAFF_BOT - STAFF_SPC - GCLEF_G_OFF,
-               glyph_gclef, GCLEF_W, GCLEF_H, GCLEF_BPR);
+    if (bass_clef)
+        glyph_blit(x, (int32_t)ui_y_of(31) - FCLEF_F_OFF,
+                   glyph_fclef, FCLEF_W, FCLEF_H, FCLEF_BPR);
+    else
+        glyph_blit(x, STAFF_BOT - STAFF_SPC - GCLEF_G_OFF,
+                   glyph_gclef, GCLEF_W, GCLEF_H, GCLEF_BPR);
 }
 
 /* accidental before a notehead: 0=sharp, 1=flat, 2=natural.
