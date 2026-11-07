@@ -1,18 +1,22 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* FM piano: the DX7 factory patch E.PIANO 4 (ROM1B #5), Algorithm 5,
- * feedback 4, decoded from the ROM1B SysEx dump (see
- * dx7_pianos_ranked.json, full_parameters.rom1b_05). This replaces the
- * v0.17 PIANO 1 (Algorithm 19): the user chose E.PIANO 4 over PIANO 1
- * for being mellower -- its 2nd harmonic sits near the real grand's
- * and its 5th-8th partials are essentially absent, where PIANO 1 was
- * a bright 1983 FM piano with the 5th-7th far too loud.
+/* FM piano: a preset engine -- five DX7 factory patches, all in
+ * integer math (no FPU, no 64-bit division). The PRESETS knob
+ * (ENC_PRESETS) selects the patch; E.PIANO 4 is the default.
  *
- * Topology (Alg 5): three parallel 2-operator pairs -- OP2 -> OP1,
- * OP4 -> OP3, OP6 -> OP5 -- with feedback on OP6. Carriers OP1, OP3,
- * OP5. All ratios are 1.00 except OP4, the tine modulator, at 14.00.
- * All detune is 0. There is no inharmonic carrier here (unlike
- * PIANO 1's 1.58); the mellowness comes from the tine modulator
- * decaying fast (OP4 R2=92) and the body pairs being plain 1:1.
+ * Patches (decoded from the ROM SysEx dumps):
+ *  0 E.PIANO 4 (ROM1B #5, Alg 5, fb 4) -- the dark one, default.
+ *  1 PIANO 1   (ROM1A #8, Alg 19, fb 6) -- bright 1983 grand.
+ *  2 E.PIANO 3 (ROM3B #6, Alg 6, fb 4) -- mellow, 5th near the grand.
+ *  3 PIANO 5   (ROM1B #2, Alg 3, fb 6) -- mellowest acoustic-named.
+ *  4 E.PIANO 1 (ROM1A #11, Alg 5, fb 6) -- the famous Rhodes.
+ * The preset is session-only: it resets to E.PIANO 4 on boot.
+ *
+ * Routing is the Dexed bus model (FmCore::algorithms, verbatim):
+ * each operator reads a modulation bus (0=none, 1, 2) and writes
+ * to a bus (0=audio out, 1, 2), adding or replacing. Operators
+ * are evaluated OP6 down to OP1, so every modulator is computed
+ * before its target. Feedback is on the operator whose flags
+ * have both top bits set (OP6 in all five patches here).
  *
  * Integer math only (no FPU, no 64-bit division):
  * - Phase is uint32, 2^32 = one cycle; increments come from NOTE_INC.
@@ -20,24 +24,28 @@
  * - A modulator output y (Q15) bends its carrier's phase by y<<18.
  *   (Dexed: phase deviation in cycles = gain * sin, and here Q15
  *   full scale is a Dexed gain of 2.0, so cycles = 2*y/32768 and
- *   the uint32 offset is y * 2^32 * 2 / 32768 = y << 18.)
- * - Feedback on OP6: Dexed fb_phase = 2*pi*g*(s1+s2) / 2^(9-feedback).
+ *   the uint32 offset is y * 2^32 * 2 / 32768 = y << 18. A bus
+ *   holding the sum of modulator outputs bends by the sum << 18;
+ *   the shift is done on the unsigned value, so it wraps modulo
+ *   2^32, which is the correct phase behaviour.)
+ * - Feedback: Dexed fb_phase = 2*pi*g*(s1+s2) / 2^(9-feedback).
  *   With the Q15 scaling this reduces to (gain_q15 * (s1+s2)) >>
- *   (6-feedback), where s1,s2 are OP6's previous two sine values
- *   (Q15). FB_SHIFT = 6 - FEEDBACK, so feedback 4 shifts by 2 and
- *   feedback 6 (v0.17's PIANO 1) shifts by 0 -- the divisor is
- *   parameterised, not hardcoded. The product is int32 (it fits:
- *   32767*65534 < 2^31) and the shift is arithmetic, which GCC/Clang
- *   guarantee for signed values.
- * - Ratios: x1 is the base increment; x14 is base<<3 + base<<2 +
- *   base<<1 = 14x. If base > (2^32-1)/14 = 306783378 the product
- *   would overflow, so the increment is clamped to 0xFFFFFFFF
- *   (Nyquist, effectively silent) -- that only happens for notes
- *   above MIDI 91, past the top of the keyboard with OCT+2.
+ *   (6-feedback), where s1,s2 are the feedback operator's previous
+ *   two sine values (Q15). FB_SHIFT = 6 - feedback, so feedback 4
+ *   shifts by 2 and feedback 6 shifts by 0 -- the divisor is
+ *   parameterised per patch, not hardcoded. The product is int32
+ *   (it fits: 32767*65534 < 2^31) and the shift is arithmetic,
+ *   which GCC/Clang guarantee for signed values.
+ * - Ratios: x1 is the base increment; the rest are shifts-and-adds
+ *   (x3 = 2+1, x5 = 4+1, x11 = 8+2+1, x14 = 8+4+2, x1.58 =
+ *   1 + 1/2 + 1/16 + 1/64 + 1/512 = 1.58008, 0.09 cents sharp).
+ *   If base > (2^32-1)/mult the product would overflow, so the
+ *   increment is clamped to 0xFFFFFFFF (Nyquist, effectively
+ *   silent) -- that only happens for notes above MIDI 91 (x14),
+ *   84 (x11), 96 (x5) or 108 (x3), past the top of the keyboard
+ *   with OCT+2 for the high ones.
  * - Detune is a small cents offset: inc += (inc>>11) * detune,
  *   about 0.9 cents per detune unit at C5 (Dexed's osc_freq).
- *   E.PIANO 4 has detune 0 on every operator, so this is a no-op
- *   here and is kept only for consistency with the v0.17 engine.
  *
  * Envelopes (DX7 EG, simplified to firmware):
  * Each operator has a 4-segment envelope (R1->L1, R2->L2, R3->L3,
@@ -53,14 +61,13 @@
  * shift = 4 + (99-R)*17/99. That matches Dexed's per-doubling
  * times to within ~1.5x across the range (R=99: ~16 samples,
  * R=81: ~128, R=58: ~2k, R=25: ~65k, R=0: ~2M -- effectively
- * a hold). No operator in this patch has a rate of 0, so every
- * segment moves.
- * Segments 0-2 are attack/decay/sustain; segment 3 (release) is
- * entered only by piano_off, and segment 4 is done.
- * Note OP2's L4 = 99 (the only operator with L4 != 0): on release
- * its envelope RISES toward GAIN_T[89+99] -- that is what the
- * patch says (Dexed does the same), a brief brightening of the
- * release. OP2 is a modulator, so it cannot keep the voice alive.
+ * a hold). Segments 0-2 are attack/decay/sustain; segment 3
+ * (release) is entered only by piano_off, and segment 4 is done.
+ * Note OP2's L4 = 99 in E.PIANO 4 (the only operator with L4 != 0
+ * there): on release its envelope RISES toward GAIN_T[89+99] --
+ * that is what the patch says (Dexed does the same), a brief
+ * brightening of the release. OP2 is a modulator, so it cannot
+ * keep the voice alive.
  *
  * Rate scaling (Dexed ScaleRate): higher notes decay faster.
  * scale_rate = (rs * x) >> 3, x = min(31, max(0, note/3 - 7)).
@@ -77,9 +84,14 @@
  * is scale_velocity >> 5, added to the output level and clamped
  * to 0..99 at note-on (stored as the operator's effective OL).
  * At the firmware's playing velocity (100) the offset is 0 for
- * every KVS in this patch (VEL_DATA[50] = 241, near 239), so the
+ * every KVS in E.PIANO 4 (VEL_DATA[50] = 241, near 239), so the
  * sound at vel 100 is the nominal patch; the sensitivity only
  * matters at other velocities.
+ *
+ * A voice keeps the patch it started with: if the preset changes
+ * while a note sounds, that note finishes with its own patch
+ * (its operators' envelopes and routing come from the voice's
+ * stored patch index, not the current preset).
  *
  * The piano-first sound rule still holds: the only sound this
  * engine makes is piano notes. There are no buzzes, beeps, clicks
@@ -88,22 +100,135 @@
  */
 #include "fm_tables.h"
 
-/* E.PIANO 4 operator parameters (from dx7_pianos_ranked.json, rom1b_05).
- * mult: 0 = x1.00, 1 = x14.00 (the tine modulator OP4). */
-typedef struct { uint8_t ol; uint8_t r[4]; uint8_t l[4]; int8_t det; uint8_t mult; uint8_t rs; uint8_t kvs; } ep4op_t;
-static const ep4op_t EP4[6] = {
-    /* ol,  R1  R2  R3  R4,   L1  L2  L3  L4, det, mult, rs, kvs */
-    { 99, {96, 43, 31, 85}, {99, 75,  0,  0}, 0, 0, 3, 0 },  /* OP1 carrier <- OP2 */
-    { 89, {95, 99, 25, 68}, {99, 75,  0, 99}, 0, 0, 5, 2 },  /* OP2 mod -> OP1 */
-    { 99, {95, 40, 29, 75}, {99, 90,  0,  0}, 0, 0, 3, 1 },  /* OP3 carrier <- OP4 */
-    { 68, {97, 92, 42, 52}, {99, 60, 40,  0}, 0, 1, 3, 4 },  /* OP4 mod -> OP3, x14.00 tine */
-    { 87, {95, 78, 29, 57}, {99, 95,  0,  0}, 0, 0, 4, 2 },  /* OP5 carrier <- OP6 */
-    { 71, {95, 78, 20, 75}, {99, 95,  0,  0}, 0, 0, 3, 0 },  /* OP6 mod -> OP5, feedback */
+/* operator parameters.
+ * mult: 0 = x1.00, 1 = x3.00, 2 = x5.00, 3 = x11.00, 4 = x14.00, 5 = x1.58. */
+typedef struct { uint8_t ol; uint8_t r[4]; uint8_t l[4]; int8_t det; uint8_t mult; uint8_t rs; uint8_t kvs; } fmop_t;
+typedef struct { const char *name; uint8_t alg; uint8_t fb; fmop_t op[6]; } patch_t;
+
+static const patch_t PATCHES[] = {
+    { "E.PIANO 4", 5, 4, {
+        /* ol,  R1  R2  R3  R4,   L1  L2  L3  L4, det, mult, rs, kvs */
+        { 99, {96, 43, 31, 85}, {99, 75,  0,  0}, 0, 0, 3, 0 },  /* OP1 carrier <- OP2 */
+        { 89, {95, 99, 25, 68}, {99, 75,  0, 99}, 0, 0, 5, 2 },  /* OP2 mod -> OP1 */
+        { 99, {95, 40, 29, 75}, {99, 90,  0,  0}, 0, 0, 3, 1 },  /* OP3 carrier <- OP4 */
+        { 68, {97, 92, 42, 52}, {99, 60, 40,  0}, 0, 4, 3, 4 },  /* OP4 mod -> OP3, x14.00 tine */
+        { 87, {95, 78, 29, 57}, {99, 95,  0,  0}, 0, 0, 4, 2 },  /* OP5 carrier <- OP6 */
+        { 71, {95, 78, 20, 75}, {99, 95,  0,  0}, 0, 0, 3, 0 },  /* OP6 mod -> OP5, feedback */
+    } },
+    { "PIANO 1", 19, 6, {
+        { 99, {81, 25, 20, 48}, {99, 82,  0,  0}, -2, 0, 4, 2 },  /* OP1 carrier <- OP2 */
+        { 87, {99,  0, 25,  0}, {99, 75,  0,  0},  2, 0, 5, 0 },  /* OP2 mod -> OP1, <- OP3 */
+        { 57, {81, 25, 25, 14}, {99, 99, 99,  0},  0, 1, 5, 0 },  /* OP3 mod -> OP2, x3.00 */
+        { 99, {81, 23, 22, 45}, {99, 78,  0,  0},  1, 0, 5, 2 },  /* OP4 carrier <- OP6 */
+        { 93, {81, 58, 36, 39}, {99, 14,  0,  0}, -1, 5, 5, 1 },  /* OP5 carrier <- OP6, x1.58 */
+        { 82, {99,  0, 25,  0}, {99, 75,  0,  0}, -1, 0, 5, 0 },  /* OP6 mod -> OP4+OP5, feedback */
+    } },
+    { "E.PIANO 3", 6, 4, {
+        { 99, {96, 25, 25, 54}, {99, 75,  0,  0}, 0, 0, 3, 0 },  /* OP1 carrier <- OP2 */
+        { 74, {95, 99,  0, 54}, {99, 99, 75,  0}, 0, 0, 3, 2 },  /* OP2 mod -> OP1 */
+        { 99, {95, 31, 20, 54}, {99, 80,  0,  0}, 0, 0, 3, 1 },  /* OP3 carrier <- OP4 */
+        { 32, {97, 68, 13, 54}, {99, 81,  0,  0}, 0, 4, 3, 4 },  /* OP4 mod -> OP3, x14.00 tine */
+        { 99, {95, 78, 20, 57}, {99, 95,  0,  0}, 0, 0, 3, 2 },  /* OP5 carrier <- OP6 */
+        { 60, {90, 52, 25, 54}, {99, 60,  0,  0}, 0, 3, 2, 7 },  /* OP6 mod -> OP5, x11.00, feedback */
+    } },
+    { "PIANO 5", 3, 6, {
+        { 99, {70, 30, 23, 50}, {99, 85,  0,  0}, 0, 0, 4, 3 },  /* OP1 carrier <- OP2 */
+        { 72, {98, 36,  6, 32}, {91, 90,  0,  0}, 0, 0, 2, 1 },  /* OP2 mod -> OP1, <- OP3 */
+        { 92, {94, 21, 33, 12}, {74, 19,  0,  0}, 0, 1, 3, 7 },  /* OP3 mod -> OP2, x3.00 */
+        { 99, {70, 30, 23, 50}, {99, 85,  0,  0}, 0, 0, 4, 3 },  /* OP4 carrier <- OP5 */
+        { 75, {98, 20,  6,  2}, {91, 90,  0,  0}, 0, 0, 2, 1 },  /* OP5 mod -> OP4, <- OP6 */
+        { 67, {94,  1, 33, 12}, { 4, 19,  0,  0}, 0, 2, 2, 1 },  /* OP6 mod -> OP5, x5.00, feedback */
+    } },
+    { "E.PIANO 1", 5, 6, {
+        { 99, {96, 25, 25, 67}, {99, 75,  0,  0},  3, 0, 3, 2 },  /* OP1 carrier <- OP2 */
+        { 58, {95, 50, 35, 78}, {99, 75,  0,  0},  0, 4, 3, 7 },  /* OP2 mod -> OP1, x14.00 tine */
+        { 99, {95, 20, 20, 50}, {99, 95,  0,  0},  0, 0, 3, 2 },  /* OP3 carrier <- OP4 */
+        { 89, {95, 29, 20, 50}, {99, 95,  0,  0},  0, 0, 3, 6 },  /* OP4 mod -> OP3 */
+        { 99, {95, 20, 20, 50}, {99, 95,  0,  0}, -7, 0, 3, 0 },  /* OP5 carrier <- OP6 */
+        { 79, {95, 29, 20, 50}, {99, 95,  0,  0},  7, 0, 3, 6 },  /* OP6 mod -> OP5, feedback */
+    } },
+};
+#define N_PRESETS (sizeof PATCHES / sizeof PATCHES[0])
+static uint8_t cur_preset;   /* session-only; resets to 0 (E.PIANO 4) on boot */
+
+/* Dexed FmCore::algorithms[32], verbatim (ops[0]=OP6 ... ops[5]=OP1).
+ * Per operator: inbus = (flags>>4)&3, outbus = flags&3,
+ * add = flags&0x04, feedback = (flags&0xc0)==0xc0. */
+static const uint8_t ALG_FLAGS[32][6] = {
+    { 0xc1, 0x11, 0x11, 0x14, 0x01, 0x14 },  /* 1 */
+    { 0x01, 0x11, 0x11, 0x14, 0xc1, 0x14 },  /* 2 */
+    { 0xc1, 0x11, 0x14, 0x01, 0x11, 0x14 },  /* 3 */
+    { 0xc1, 0x11, 0x94, 0x01, 0x11, 0x14 },  /* 4 */
+    { 0xc1, 0x14, 0x01, 0x14, 0x01, 0x14 },  /* 5 */
+    { 0xc1, 0x94, 0x01, 0x14, 0x01, 0x14 },  /* 6 */
+    { 0xc1, 0x11, 0x05, 0x14, 0x01, 0x14 },  /* 7 */
+    { 0x01, 0x11, 0xc5, 0x14, 0x01, 0x14 },  /* 8 */
+    { 0x01, 0x11, 0x05, 0x14, 0xc1, 0x14 },  /* 9 */
+    { 0x01, 0x05, 0x14, 0xc1, 0x11, 0x14 },  /* 10 */
+    { 0xc1, 0x05, 0x14, 0x01, 0x11, 0x14 },  /* 11 */
+    { 0x01, 0x05, 0x05, 0x14, 0xc1, 0x14 },  /* 12 */
+    { 0xc1, 0x05, 0x05, 0x14, 0x01, 0x14 },  /* 13 */
+    { 0xc1, 0x05, 0x11, 0x14, 0x01, 0x14 },  /* 14 */
+    { 0x01, 0x05, 0x11, 0x14, 0xc1, 0x14 },  /* 15 */
+    { 0xc1, 0x11, 0x02, 0x25, 0x05, 0x14 },  /* 16 */
+    { 0x01, 0x11, 0x02, 0x25, 0xc5, 0x14 },  /* 17 */
+    { 0x01, 0x11, 0x11, 0xc5, 0x05, 0x14 },  /* 18 */
+    { 0xc1, 0x14, 0x14, 0x01, 0x11, 0x14 },  /* 19 */
+    { 0x01, 0x05, 0x14, 0xc1, 0x14, 0x14 },  /* 20 */
+    { 0x01, 0x14, 0x14, 0xc1, 0x14, 0x14 },  /* 21 */
+    { 0xc1, 0x14, 0x14, 0x14, 0x01, 0x14 },  /* 22 */
+    { 0xc1, 0x14, 0x14, 0x01, 0x14, 0x04 },  /* 23 */
+    { 0xc1, 0x14, 0x14, 0x14, 0x04, 0x04 },  /* 24 */
+    { 0xc1, 0x14, 0x14, 0x04, 0x04, 0x04 },  /* 25 */
+    { 0xc1, 0x05, 0x14, 0x01, 0x14, 0x04 },  /* 26 */
+    { 0x01, 0x05, 0x14, 0xc1, 0x14, 0x04 },  /* 27 */
+    { 0x04, 0xc1, 0x11, 0x14, 0x01, 0x14 },  /* 28 */
+    { 0xc1, 0x14, 0x01, 0x14, 0x04, 0x04 },  /* 29 */
+    { 0x04, 0xc1, 0x11, 0x14, 0x04, 0x04 },  /* 30 */
+    { 0xc1, 0x14, 0x04, 0x04, 0x04, 0x04 },  /* 31 */
+    { 0xc4, 0x04, 0x04, 0x04, 0x04, 0x04 },  /* 32 */
 };
 
-/* Dexed feedback level for this patch; the shift is derived from it. */
-#define FB_LEVEL 4u
-#define FB_SHIFT (6u - FB_LEVEL)
+/* a patch's decoded routing (operators indexed 0=OP1 .. 5=OP6). */
+typedef struct {
+    uint8_t inbus[6];     /* 0=none, 1=bus1, 2=bus2 */
+    uint8_t outbus[6];    /* 0=audio out, 1=bus1, 2=bus2 */
+    uint8_t add[6];       /* 1=add to the bus, 0=replace it */
+    uint8_t fb_op;        /* operator with feedback, or 0xFF */
+    uint8_t fb_shift;     /* 6 - feedback level */
+    uint8_t carrier_mask; /* bit o set if operator o outputs to audio */
+} fmroute_t;
+static fmroute_t routes[N_PRESETS];
+static uint8_t routes_ready;
+
+static void routes_init(void) {
+    uint8_t p, j;
+    if (routes_ready) return;
+    for (p = 0; p < N_PRESETS; p++) {
+        const uint8_t *fl = ALG_FLAGS[PATCHES[p].alg - 1];
+        fmroute_t *R = &routes[p];
+        R->fb_op = 0xFF;
+        R->carrier_mask = 0;
+        for (j = 0; j < 6; j++) {
+            uint8_t o = 5 - j;   /* flags[j] is OP(6-j) */
+            uint8_t f = fl[j];
+            R->inbus[o] = (uint8_t)((f >> 4) & 3);
+            R->outbus[o] = (uint8_t)(f & 3);
+            R->add[o] = (f & 0x04) ? 1u : 0u;
+            if ((f & 0xc0) == 0xc0 && PATCHES[p].fb) R->fb_op = o;
+            if (R->outbus[o] == 0) R->carrier_mask |= (uint8_t)(1u << o);
+        }
+        R->fb_shift = (uint8_t)(6 - PATCHES[p].fb);
+    }
+    routes_ready = 1;
+}
+
+static void piano_preset_set(uint8_t idx) {
+    if (idx < N_PRESETS) cur_preset = idx;
+}
+static uint8_t piano_preset_get(void) { return cur_preset; }
+static uint8_t piano_preset_count(void) { return (uint8_t)N_PRESETS; }
+static const char *piano_preset_name(void) { return PATCHES[cur_preset].name; }
 
 /* Dexed velocity table (VEL_DATA, 64 entries, indexed by vel>>1). */
 static const uint8_t VEL_DATA[64] = {
@@ -129,12 +254,13 @@ typedef struct {
 #define NV 6u
 static struct {
     fm_op_t op[6];
-    int32_t fb1, fb2;   /* OP6 feedback: its previous two sine values, Q15 */
+    int32_t fb1, fb2;   /* feedback operator's previous two sine values, Q15 */
     volatile int32_t env;     /* carrier gain sum, for voice allocation */
     volatile int32_t target;  /* 1 while sounding, 0 when done */
     volatile uint8_t rel;
     uint8_t note;
     uint8_t vel;
+    uint8_t patch;      /* the preset this voice started with */
     uint32_t age;
 } voice[NV];
 static volatile uint32_t ages;
@@ -146,6 +272,29 @@ static int32_t fsin(uint32_t ph) {
     int32_t s0 = SINE_T[i];
     int32_t s1 = SINE_T[(i + 1u) & 0xFFu];
     return s0 + (((s1 - s0) * (int32_t)frac) >> 8);
+}
+
+/* phase increment for a ratio code, with an overflow clamp
+ * (Nyquist, effectively silent) past the top of the keyboard. */
+static uint32_t ratio_inc(uint32_t base, uint8_t mult) {
+    switch (mult) {
+    case 1:  /* x3.00 = 2+1 */
+        if (base > 1431655765u) return 0xFFFFFFFFu;
+        return (base << 1) + base;
+    case 2:  /* x5.00 = 4+1 */
+        if (base > 858993459u) return 0xFFFFFFFFu;
+        return (base << 2) + base;
+    case 3:  /* x11.00 = 8+2+1 */
+        if (base > 390451572u) return 0xFFFFFFFFu;
+        return (base << 3) + (base << 1) + base;
+    case 4:  /* x14.00 = 8+4+2 */
+        if (base > 306783378u) return 0xFFFFFFFFu;
+        return (base << 3) + (base << 2) + (base << 1);
+    case 5:  /* x1.58 = 1 + 1/2 + 1/16 + 1/64 + 1/512 = 1.58008 */
+        return base + (base >> 1) + (base >> 4) + (base >> 6) + (base >> 9);
+    default: /* x1.00 */
+        return base;
+    }
 }
 
 /* DX7 rate -> EG step shift (see the header comment). */
@@ -185,7 +334,7 @@ static uint32_t gain_idx(uint32_t idx) {
 }
 
 /* one envelope step for one operator. */
-static void eg_step(fm_op_t *o, const ep4op_t *p) {
+static void eg_step(fm_op_t *o, const fmop_t *p) {
     int32_t diff;
     if (o->seg >= 4) return;
     diff = o->tgt - o->eg;
@@ -214,9 +363,12 @@ static void eg_step(fm_op_t *o, const ep4op_t *p) {
 
 static void piano_on(uint8_t note, uint8_t vel) {
     uint32_t v, pick = 0, best = 0xFFFFFFFFu;
-    uint32_t base, inc;
+    uint32_t base;
     uint8_t o;
+    const patch_t *P;
     if (note > 127u || !vel) return;
+    routes_init();
+    P = &PATCHES[cur_preset];
     for (v = 0; v < NV; v++) {
         uint32_t score = (voice[v].note == note && voice[v].env > 1000)
             ? 0u : (uint32_t)voice[v].env + 1u;
@@ -224,25 +376,18 @@ static void piano_on(uint8_t note, uint8_t vel) {
     }
     base = NOTE_INC[note];
     for (o = 0; o < 6; o++) {
-        const ep4op_t *p = &EP4[o];
+        const fmop_t *p = &P->op[o];
         fm_op_t *op = &voice[pick].op[o];
         int32_t ole;
+        uint32_t inc;
         /* velocity-adjusted output level, clamped to 0..99. */
         ole = (int32_t)p->ol + vel_ol_offset(vel, p->kvs);
         if (ole < 0) ole = 0;
         if (ole > 99) ole = 99;
         op->ol = (uint8_t)ole;
         op->rsadj = rate_adj(note, p->rs);
-        switch (p->mult) {
-        case 1:  /* x14.00 tine: 8+4+2 */
-            if (base > 306783378u) inc = 0xFFFFFFFFu;  /* would overflow; clamp to Nyquist (silent) */
-            else inc = (base << 3) + (base << 2) + (base << 1);
-            break;
-        default:
-            inc = base;
-            break;
-        }
-        /* detune, ~0.9 cents per unit at C5 (all 0 in this patch). */
+        inc = ratio_inc(base, p->mult);
+        /* detune, ~0.9 cents per unit at C5. */
         inc += (uint32_t)((int32_t)(inc >> 11) * (int32_t)p->det);
         op->inc = inc;
         op->ph = 0;
@@ -255,6 +400,7 @@ static void piano_on(uint8_t note, uint8_t vel) {
     voice[pick].fb2 = 0;
     voice[pick].note = note;
     voice[pick].vel = vel;
+    voice[pick].patch = cur_preset;
     voice[pick].age = ++ages;
     voice[pick].env = 1;
     voice[pick].target = 1;
@@ -265,10 +411,12 @@ static void piano_off(uint8_t note) {
     uint32_t v;
     uint8_t o;
     for (v = 0; v < NV; v++) {
+        const patch_t *P;
         if (voice[v].note != note) continue;
+        P = &PATCHES[voice[v].patch];
         voice[v].rel = 1;
         for (o = 0; o < 6; o++) {
-            const ep4op_t *p = &EP4[o];
+            const fmop_t *p = &P->op[o];
             fm_op_t *op = &voice[v].op[o];
             if (op->seg < 3) {
                 op->seg = 3;
@@ -281,49 +429,71 @@ static void piano_off(uint8_t note) {
 
 static void app_audio(int32_t *out, uint32_t n) {
     uint32_t v, i;
-    uint8_t o;
+    routes_init();
     for (v = 0; v < NV; v++) {
+        const patch_t *P;
+        const fmroute_t *R;
         fm_op_t *op;
         int32_t car_sum;
+        uint8_t o, car_done;
         if (!voice[v].target && !voice[v].env) continue;
+        P = &PATCHES[voice[v].patch];
+        R = &routes[voice[v].patch];
         op = voice[v].op;
         for (i = 0; i < n; i++) {
-            int32_t s2, s4, s6, s1, s3, s5;
-            int32_t y2, y4, y6, out1, out3, out5, s;
-            int32_t fb;
-            for (o = 0; o < 6; o++) eg_step(&op[o], &EP4[o]);
-            /* OP2 -> OP1: first pair. */
-            s2 = fsin(op[1].ph);
-            y2 = ((op[1].eg >> 16) * s2) >> 15;
-            s1 = fsin(op[0].ph + ((uint32_t)y2 << 18));
-            out1 = ((op[0].eg >> 16) * s1) >> 15;
-            /* OP4 (x14 tine) -> OP3: second pair. */
-            s4 = fsin(op[3].ph);
-            y4 = ((op[3].eg >> 16) * s4) >> 15;
-            s3 = fsin(op[2].ph + ((uint32_t)y4 << 18));
-            out3 = ((op[2].eg >> 16) * s3) >> 15;
-            /* OP6 with feedback -> OP5: third pair. */
-            fb = ((op[5].eg >> 16) * (voice[v].fb1 + voice[v].fb2)) >> FB_SHIFT;
-            s6 = fsin(op[5].ph + (uint32_t)fb);
-            y6 = ((op[5].eg >> 16) * s6) >> 15;
-            voice[v].fb2 = voice[v].fb1;
-            voice[v].fb1 = s6;
-            s5 = fsin(op[4].ph + ((uint32_t)y6 << 18));
-            out5 = ((op[4].eg >> 16) * s5) >> 15;
-            /* the three carriers, mixed and velocity-scaled. */
-            s = (out1 + out3 + out5) >> 2;
-            s = (s * (int32_t)voice[v].vel) >> 7;
-            out[2u * i] += s;
-            out[2u * i + 1u] += s;
-            for (o = 0; o < 6; o++) op[o].ph += op[o].inc;
+            int32_t bus1 = 0, bus2 = 0, vout = 0;
+            int8_t o8;
+            /* OP6 down to OP1: every modulator is computed before
+             * its target, and each bus is written before it is read. */
+            for (o8 = 5; o8 >= 0; o8--) {
+                uint32_t ph;
+                int32_t s, y;
+                o = (uint8_t)o8;
+                eg_step(&op[o], &P->op[o]);
+                ph = op[o].ph;
+                if (R->inbus[o] == 1) ph += ((uint32_t)bus1 << 18);
+                else if (R->inbus[o] == 2) ph += ((uint32_t)bus2 << 18);
+                if (o == R->fb_op) {
+                    int32_t fb = ((op[o].eg >> 16) * (voice[v].fb1 + voice[v].fb2)) >> R->fb_shift;
+                    ph += (uint32_t)fb;
+                }
+                s = fsin(ph);
+                y = ((op[o].eg >> 16) * s) >> 15;
+                if (o == R->fb_op) {
+                    voice[v].fb2 = voice[v].fb1;
+                    voice[v].fb1 = s;
+                }
+                if (R->outbus[o] == 0) {
+                    if (R->add[o]) vout += y; else vout = y;
+                } else if (R->outbus[o] == 1) {
+                    if (R->add[o]) bus1 += y; else bus1 = y;
+                } else {
+                    if (R->add[o]) bus2 += y; else bus2 = y;
+                }
+                op[o].ph += op[o].inc;
+            }
+            /* the carriers, mixed and velocity-scaled. */
+            {
+                int32_t s = vout >> 2;
+                s = (s * (int32_t)voice[v].vel) >> 7;
+                out[2u * i] += s;
+                out[2u * i + 1u] += s;
+            }
         }
         /* voice level for allocation; done when released and all
          * carriers have finished their release segment. (v0.17
          * tested car_sum == 0, but L4 = 0 still leaves gain 7, so
          * a released voice never reached 0 and was never freed.) */
-        car_sum = (op[0].eg >> 16) + (op[2].eg >> 16) + (op[4].eg >> 16);
+        car_sum = 0;
+        car_done = 1;
+        for (o = 0; o < 6; o++) {
+            if (R->carrier_mask & (1u << o)) {
+                car_sum += (op[o].eg >> 16);
+                if (op[o].seg != 4) car_done = 0;
+            }
+        }
         voice[v].env = car_sum;
-        if (voice[v].rel && op[0].seg == 4 && op[2].seg == 4 && op[4].seg == 4)
+        if (voice[v].rel && car_done)
             voice[v].target = 0;
     }
 }

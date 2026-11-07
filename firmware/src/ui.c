@@ -272,7 +272,17 @@ void ui_tempo(uint32_t bpm) {
     b[i++] = ' '; b[i++] = 'B'; b[i++] = 'P'; b[i++] = 'M'; b[i] = 0;
     overlay_text(180u, 224u, b, &FONT_S, 16u);
 }
+/* the hint strip: clear it first, so a shorter hint never leaves the
+ * tail of a longer one (the overlay only repaints its own width). */
 void ui_hint(const char *s) {
+    lcd_fill(0u, 224u, 180u, 16u, PAPER);
+    overlay_text(8u, 224u, s, &FONT_S, 16u);
+}
+/* the preset name, briefly, in the style of the BPM readout: it clears
+ * the hint strip first (the name is shorter than the hint it replaces),
+ * then draws the name at the hint position. The tempo (x=180..) is left alone. */
+void ui_preset(const char *s) {
+    lcd_fill(0u, 224u, 180u, 16u, PAPER);
     overlay_text(8u, 224u, s, &FONT_S, 16u);
 }
 /* amber playhead triangle below the staff, pointing up at the cursor */

@@ -51,6 +51,7 @@ void ui_title(const char *s);
 void ui_tempo(uint32_t bpm);            /* persistent BPM readout, bottom right */
 void ui_oct(int32_t shift);              /* octave shift, top right (+1/-1/blank) */
 void ui_hint(const char *s);
+void ui_preset(const char *s);      /* patch name, briefly, at the hint position */
 void ui_cursor_mark(uint32_t x);           /* amber playhead below the staff */
 
 #define UI_PAPER 0xF7BCu   /* warm paper */
