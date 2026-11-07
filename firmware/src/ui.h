@@ -2,7 +2,7 @@
 /* Maestro: smooth side-scrolling treble staff.
  *
  * The screen is sheet music. Rendering uses 1-bit offscreen planes
- * (240x132x1 = 4.0 KB each): each frame the planes shift left by the scroll
+ * (240x156x1 = 4.7 KB each): each frame the planes shift left by the scroll
  * delta, only the newly exposed right columns are drawn from the piece
  * data, then the planes are composited to RGB565 and blitted. No full-screen
  * clear per frame, no flicker.
@@ -16,14 +16,14 @@
 #include <stdint.h>
 
 /* staff geometry (240x240) */
-#define STAFF_TOP 94u        /* F6, top line */
+#define STAFF_TOP 116u       /* F6, top line */
 #define STAFF_SPC 14u        /* line spacing */
-#define STAFF_BOT 150u       /* E5, bottom line */
+#define STAFF_BOT 172u       /* E5, bottom line */
 #define TITLE_Y 10u
 
 /* the scroll region: only this band moves; title/cursor/text are static */
-#define SCROLL_TOP 72u
-#define SCROLL_H 132u        /* 72..204: staff, stems, ledger lines (12-row strips) */
+#define SCROLL_TOP 48u
+#define SCROLL_H 156u        /* 48..204: staff, stems, ledger lines (12-row strips) */
 
 /* 1-bit planes (scroll region only) */
 void ui_paper(void);                       /* full screen to paper, once */

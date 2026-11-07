@@ -27,8 +27,8 @@
  * The playhead is fixed (CURSOR_X); the sheet scrolls under it, and
  * the playhead is the sounding point: whenever it crosses a note,
  * that note sounds -- while time moves (PLAY) or while you scrub
- * the sheet with KNOB4 (fine, 4px per click) or KNOB3 (coarse, one
- * beat per click, snapping to beat boundaries). Scrubbing works from
+ * the sheet with KNOB4 (coarse, one beat per click, snapping to beat
+ * boundaries) or KNOB3 (fine, 4px per click). Scrubbing works from
  * the moment the device starts: in the book it enters the piece
  * stopped, then moves the sheet.
  *
@@ -131,10 +131,12 @@ static void layout_piece(const lesson_t *L) {
     bar_ticks = (uint32_t)L->beats_per_bar * 96u;
     if (!bar_ticks) bar_ticks = 384u;
     /* symbols: clef, bars, notes/rests, final bar (order doesn't matter;
-     * planes decide). The end sits just past the last note's duration. */
+     * planes decide). The end is the barline at the end of the last bar,
+     * so the loop is always a whole number of bars -- never mid-bar.
+     * The final barline is the end bar itself, not a separate barline. */
     psym_n = 0;
     psym[psym_n].x = CLEF_X; psym[psym_n].type = SYM_CLEF; psym_n++;
-    for (b = 1; b * bar_ticks < total_ticks + bar_ticks && psym_n < MAXPSYM; b++) {
+    for (b = 1; b * bar_ticks < total_ticks && psym_n < MAXPSYM; b++) {
         psym[psym_n].x = (uint16_t)bar_x(b); psym[psym_n].type = SYM_BAR; psym_n++;
     }
     for (i = 0; i < evn && psym_n < MAXPSYM; i++) {
@@ -144,7 +146,14 @@ static void layout_piece(const lesson_t *L) {
         psym[psym_n].ticks = L->events[i].ticks;
         psym_n++;
     }
-    piece_end_x = evn ? evx[evn - 1u] + (uint32_t)L->events[evn - 1u].ticks * PXQ / 96u : CLEF_W;
+    if (evn) {
+        uint32_t end_bar = total_ticks / bar_ticks;
+        if (total_ticks % bar_ticks) end_bar++;   /* round up to a barline */
+        if (!end_bar) end_bar = 1;
+        piece_end_x = bar_x(end_bar);
+    } else {
+        piece_end_x = CLEF_W;
+    }
     if (psym_n < MAXPSYM) {
         psym[psym_n].x = (uint16_t)piece_end_x; psym[psym_n].type = SYM_END; psym_n++;
     }
@@ -163,6 +172,7 @@ static uint8_t sel = 0;
 static uint8_t is_free = 0;
 static uint8_t delete_head = 0;  /* EDIT: the playhead erases instead of playing */
 static uint32_t preset_notice_until;  /* fm1_ms until the patch name clears */
+static uint32_t keys_down;   /* bit k = key k currently down (main loop) */
 
 /* moving = time advances; recording = notes are stored. */
 static uint8_t moving(void) { return state == ST_PLAY || state == ST_REC; }
@@ -588,21 +598,28 @@ static void play_frame(void) {
     }
     /* the end: the final bar (book) or the marked end (free). A jump
      * loops before this is reached; with no jump, playback stops at
-     * the end (after the end bar scrolls off). */
+     * the end. It stops as soon as the playhead passes the end bar
+     * (once any sounding note has finished), not a screenful later --
+     * the old +240 made it look like it never stopped. The +240
+     * remains only as a backstop for a stuck note. */
     {
         uint32_t end = 0;
         uint8_t has_end = 0;
         if (!is_free && evn) { end = piece_end_x; has_end = 1; }
         else if (is_free && free_end_set) { end = free_end_x; has_end = 1; }
-        if (has_end && px > end + 240u) {
+        if (has_end && px > end && (!n_sounding || px > end + 240u)) {
             tape_stop();
             render_window(scroll_px);
             return;
         }
-        if (!has_end && is_free && rec_n > 0 && state == ST_PLAY &&
+        if (!has_end && is_free && rec_n > 0 && !keys_down &&
             pb_idx >= rec_n && !n_sounding &&
             px > rec[rec_n - 1u].x + 240u) {
-            /* open take, no marked end: stop past the last note */
+            /* open take, no marked end: stop past the last note.
+             * This fires while recording too (not just PLAY): the old
+             * ST_PLAY gate meant a free-play take never stopped. It
+             * waits until no key is held, so it cannot cut off a
+             * note you are still playing. */
             tape_stop();
             render_window(scroll_px);
             return;
@@ -613,7 +630,6 @@ static void play_frame(void) {
 }
 
 /* ---- scrubbing: the playhead sounds (or erases) what it crosses ---- */
-static uint32_t keys_down;   /* bit k = key k currently down (main loop) */
 static uint8_t midi_held(uint8_t midi) {
     uint32_t k;
     for (k = 0; k < 27u; k++)
@@ -688,11 +704,11 @@ static void scrub_to(uint32_t new_scroll) {
     render_window(scroll_px);
 }
 
-/* KNOB3: coarse scroll, one beat per click, snapping the playhead to
+/* KNOB4: coarse scroll, one beat per click, snapping the playhead to
  * a beat boundary. Beats sit at CLEF_W + n*PXQ (n = 0, 1, 2, ...).
  * dir is the number of clicks (the encoder may deliver several at
  * once if the knob is turned fast), so it moves |dir| beats. */
-static void knob3_scroll(int32_t dir) {
+static void knob_coarse_scroll(int32_t dir) {
     int32_t px = (int32_t)play_x();
     int32_t base, target_beat, target_px, new_scroll;
     if (!dir) return;
@@ -831,22 +847,24 @@ static void app_main(void) {
         }
         e = fm1_enc_take(ENC_KNOB4);
         if (e && (state == ST_STOP || state == ST_BOOK)) {
-            /* KNOB4 moves the sheet (scrub the tape), from the moment
-             * the device starts: in the book it enters the piece
-             * stopped, then moves the sheet. Notes sound as the
-             * playhead passes them (or are erased, delete head on). */
+            /* KNOB4 scrolls coarsely, one beat per click, snapping
+             * the playhead to a beat boundary. In the book it enters
+             * the piece stopped, then moves the sheet. Notes sound
+             * as the playhead passes them (or are erased, delete
+             * head on). */
+            if (state == ST_BOOK) enter_piece_stopped();
+            knob_coarse_scroll(e);
+        }
+        e = fm1_enc_take(ENC_KNOB3);
+        if (e && (state == ST_STOP || state == ST_BOOK)) {
+            /* KNOB3 moves the sheet finely (scrub the tape), 4px per
+             * click, from the moment the device starts: in the book
+             * it enters the piece stopped, then moves the sheet. */
             int32_t s;
             if (state == ST_BOOK) enter_piece_stopped();
             s = (int32_t)scroll_px + e * 4;
             if (s < 0) s = 0;
             scrub_to((uint32_t)s);
-        }
-        e = fm1_enc_take(ENC_KNOB3);
-        if (e && (state == ST_STOP || state == ST_BOOK)) {
-            /* KNOB3 scrolls coarsely, one beat per click, snapping
-             * the playhead to a beat boundary. */
-            if (state == ST_BOOK) enter_piece_stopped();
-            knob3_scroll(e);
         }
         e = fm1_enc_take(ENC_PRESETS);
         if (e) {
