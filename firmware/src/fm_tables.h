@@ -1,4 +1,4 @@
-/* Generated tables for the FM piano (v0.17). Do not hand-edit; regenerate. */
+/* Generated tables for the FM piano (v0.18). Do not hand-edit; regenerate. */
 static const int16_t SINE_T[256] = {
     0, 804, 1608, 2410, 3212, 4011, 4808, 5602,
     6393, 7179, 7962, 8739, 9512, 10278, 11039, 11793,

@@ -46,7 +46,7 @@
  * program counter.
  */
 
-#include "fm_piano.c"   /* DX7 PIANO 1 (Alg 19) FM voice -- v0.17, replaces the sampled piano */
+#include "fm_piano.c"   /* DX7 E.PIANO 4 (Alg 5) FM voice -- v0.18, mellower than v0.17's PIANO 1 */
 
 /* ---- pieces: the book ---- */
 #define NPIECES 6u
