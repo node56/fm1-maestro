@@ -9,6 +9,10 @@ import { Updater } from './vendor/fm1ota.js';
 import { productOf, logicalImage, sha256hex } from './vendor/fm1pkg.js';
 
 const FW_URL = 'fw/maestro-v0.20.fwsc';
+// The version shown on the install screen is derived from FW_URL, so the
+// screen can never disagree with the file it actually installs. The ship
+// flow only has to update FW_URL.
+const FW_VERSION = (FW_URL.match(/maestro-(v[\d.]+)\.fwsc/) || [])[1] || 'unknown';
 const IS_OTA = (id) => /^ota-/i.test(id.model);
 
 const $ = (id) => document.getElementById(id);
@@ -76,7 +80,7 @@ async function loadPackage() {
   image = logicalImage(raw);
   const sha = await sha256hex(raw);
   ui.pkg.innerHTML =
-    '<b>Package:</b> ' + escapeHtml(product) +
+    '<b>Package:</b> Maestro ' + escapeHtml(FW_VERSION) + ' — ' + escapeHtml(product) +
     ' <span class="dim">(' + (raw.length / 1024).toFixed(0) + ' KB, sha256 ' + sha.slice(0, 16) + '…)</span>';
   logLine('package ' + product + ' loaded (' + image.length + ' image bytes)');
 }
@@ -187,6 +191,9 @@ ui.btnConnect.addEventListener('click', connect);
 ui.btnInstall.addEventListener('click', install);
 ui.btnResume.addEventListener('click', install);
 ui.btnDisconnect.addEventListener('click', disconnect);
+
+const versionBadge = document.getElementById('versionBadge');
+if (versionBadge) versionBadge.textContent = FW_VERSION;
 
 setStatus('Connect your FM-1 over USB, then press Connect.');
 logLine('Maestro web installer ready. Needs Chrome/Edge with WebMIDI (SysEx) access.');
