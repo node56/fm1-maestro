@@ -8,7 +8,7 @@
 import { Updater } from './vendor/fm1ota.js';
 import { productOf, logicalImage, sha256hex } from './vendor/fm1pkg.js';
 
-const FW_URL = 'fw/maestro-v0.21.fwsc';
+const FW_URL = 'fw/maestro-v0.22.fwsc';
 // The version shown on the install screen is derived from FW_URL, so the
 // screen can never disagree with the file it actually installs. The ship
 // flow only has to update FW_URL.

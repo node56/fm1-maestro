@@ -40,6 +40,22 @@ duration (`R q`). `|` is a bar line — visual only, ignored by the
 parser (but keep bars honest to `time:`; the host test warns on
 mismatches).
 
+## Standard MIDI files
+
+A `.mid` file in `lessons/` is a lesson too, parsed directly by
+`tools/lessons2c.py` — no re-encoding, no intermediate format. An
+ordinary public-domain `.mid` file can be dropped in as-is:
+
+* Format 0 or 1, any PPQ (ticks are rescaled to the firmware's 96).
+* Notes are Note On / Note Off pairs (a Note On with velocity 0 is
+  a Note Off). The lesson is a single melodic line: at each onset
+  the highest pitch wins, a note starting while another sounds is
+  skipped, and gaps between notes become rests.
+* Title from the track-name meta (0x03), else the file name; tempo
+  from the Set Tempo meta (0x51), else 72 BPM; metre from the time
+  signature meta (0x58), else 4/4. Kind is always `melody`, level 0,
+  and the position is the lowest note in the file.
+
 ## Kinds
 
 * `note-id`: `notes:` lists single target notes; the player finds each.

@@ -94,9 +94,29 @@
  * at whatever tempo you set. The piece ends at a final double bar. A
  * score is a program: the end bar is Fine, the jump is a loop to the
  * start, and the playhead is the program counter.
+ *
+ * v0.22: the take is Standard MIDI File data (midi.h/midi.c). One
+ * unified event array holds every sheet's take, as MIDI events with
+ * delta times (PPQ 96, which is the firmware's tick unit exactly, so
+ * timing maps directly: a note at piece-x px sits at px*96/PXQ
+ * ticks). A note is a Note On / Note Off pair; a chord is several
+ * Note Ons at the same delta time. A jump is a Marker meta event
+ * (0xFF 0x06 "JUMP"); each sheet's block ends with exactly one End
+ * of Track (0xFF 0x2F) -- a format-1 file has one track per sheet,
+ * and the in-memory array is partitioned the same way. SELECT
+ * switches sheets from anywhere -- on the tape as well as in the
+ * book -- and never erases: the take, the playhead offset and the
+ * tempo are saved per sheet and restored on switch. A sheet's block
+ * is found by a linear scan counting End of Track events (the array
+ * caps at 2048 events, a switch is a human action). Blue notes stay
+ * separate lesson data, now parsed from .mid files at build time
+ * (tools/lessons2c.py), never in the take. The take serializes
+ * straight to a .mid file (midi_write) and parses straight back
+ * (midi_parse): no re-encoding, no lossy translation layer.
  */
 
 #include "fm_piano.c"   /* DX7 FM piano presets (E.PIANO 4 default) -- v0.19 */
+#include "midi.c"   /* Standard MIDI File events: the take -- v0.22 */
 
 /* ---- pieces: the book ---- */
 #define NPIECES 6u
@@ -275,14 +295,102 @@ static void show_preset(void) {
     preset_notice_until = fm1_ms + PRESET_NOTICE_MS;
 }
 
-/* the take: notes and jumps, sorted by x. A jump is a symbol in the
- * take like a note (ticks and midi unused); the playhead loops to the
- * beginning when it hits one, and the delete head erases it. */
-#define MAXREC 512
+/* the take: MIDI events, in time order within each sheet's block.
+ * One unified array (midi.h): a note is a Note On / Note Off pair, a
+ * chord is several Note Ons at the same delta time, a jump is a
+ * Marker meta event ("JUMP"), and each sheet's block ends with
+ * exactly one End of Track meta event -- the list always holds all
+ * NBOOK blocks, even when a sheet's take is empty (rec_init). The
+ * playhead's pb_idx stays inside the current sheet's block. */
+#define MAXREC 2048u   /* MIDI events (a note is two: ~1000 notes, 16 KiB) */
 #define PUNCH_W 8u   /* replaying a pitch replaces it nearby (fix, don't stack) */
+#define PUNCH_TICKS (PUNCH_W * 96u / PXQ)   /* the punch window, in ticks */
 #define END_TAIL_PX 240u  /* open take: stop a screen-width past the last note */
-static struct { uint16_t x; uint16_t ticks; uint8_t midi; uint8_t is_jump; } rec[MAXREC];
+#define REC_X_MAX 4095u  /* the take clamps at this piece-x (12285 ticks) */
+static mev_t rec[MAXREC];
 static uint16_t rec_n;
+/* per-sheet state, saved on switch and restored on switch back:
+ * the playhead offset, the tempo, and (free play only) the marked
+ * end. The book selection itself persists in the settings blob. */
+static uint32_t sheet_ts[NBOOK];
+static uint32_t sheet_tempo[NBOOK];
+static uint8_t sheet_end_set[NBOOK];
+static uint32_t sheet_end_x[NBOOK];
+
+/* piece-x <-> MIDI ticks. The tick unit is 96 per quarter and a
+ * quarter is PXQ px, so the factor is exact (96/32 = 3). */
+static uint32_t px_to_ticks(uint32_t px) { return px * 96u / PXQ; }
+static uint32_t ticks_to_px(uint32_t t) { return t * PXQ / 96u; }
+
+/* the End of Track index of sheet s (a linear scan counting them). */
+static uint16_t sheet_end_idx(uint8_t s) {
+    uint16_t i;
+    uint8_t seen = 0;
+    for (i = 0; i < rec_n; i++)
+        if (mev_is_eot(&rec[i])) {
+            if (seen == s) return i;
+            seen++;
+        }
+    return rec_n;
+}
+/* the first event of sheet s's block (the event after the previous
+ * sheet's End of Track, or 0 for the first sheet). */
+static uint16_t sheet_begin_idx(uint8_t s) {
+    return s == 0 ? 0 : (uint16_t)(sheet_end_idx((uint8_t)(s - 1u)) + 1u);
+}
+/* the take events of sheet s live in [begin, end): the End of Track
+ * itself is at end and is not a note. */
+static uint16_t sheet_notes_begin(uint8_t s) { return sheet_begin_idx(s); }
+static uint16_t sheet_notes_end(uint8_t s) { return sheet_end_idx(s); }
+
+/* the take starts as NBOOK empty blocks: one End of Track per sheet. */
+static void rec_init(void) {
+    uint8_t s;
+    rec_n = 0;
+    for (s = 0; s < NBOOK; s++) {
+        rec[rec_n].delta = 0; rec[rec_n].status = MIDI_META;
+        rec[rec_n].d1 = MIDI_META_EOT; rec[rec_n].d2 = 0;
+        rec_n++;
+    }
+}
+
+/* remove the take event at i, closing the gap (the event after it
+ * inherits its delta, so absolute times after i are unchanged). */
+static void remove_rec(uint16_t i) { mev_remove(rec, &rec_n, i); }
+
+/* insert one MIDI event at absolute time abs_ticks inside sheet
+ * [b, e). ge=1 puts it before events already at that time, ge=0
+ * after them: a Note On goes after (an off ending at the same tick
+ * must come first, or the new note would end at once), anything
+ * else goes before. */
+static void insert_ev_abs(uint16_t b, uint16_t e, uint32_t abs_ticks, uint8_t st, uint8_t d1, uint8_t d2, uint8_t ge) {
+    uint16_t pos = mev_find_abs(rec, b, e, abs_ticks, ge);
+    uint32_t prev = pos > b ? mev_abs(rec, b, (uint16_t)(pos - 1u)) : 0;
+    uint32_t delta = abs_ticks > prev ? abs_ticks - prev : 0;
+    mev_insert(rec, &rec_n, MAXREC, pos, delta, st, d1, d2);
+}
+
+/* the piece-x of the Note Off paired with the Note On at on_idx
+ * (the first Note Off for that pitch after it); the default quarter
+ * note when there is none (a take note always has one). */
+static uint32_t note_off_px(uint16_t b, uint16_t e, uint16_t on_idx, uint8_t pitch, uint32_t on_abs_ticks) {
+    uint16_t j;
+    for (j = (uint16_t)(on_idx + 1u); j < e; j++)
+        if (mev_is_note_off(&rec[j]) && rec[j].d1 == pitch)
+            return ticks_to_px(mev_abs(rec, b, j));
+    return ticks_to_px(on_abs_ticks + 96u);
+}
+
+/* remove a note: its Note On and its paired Note Off (the off first,
+ * so the on's index stays valid). */
+static void remove_note_pair(uint16_t on_idx) {
+    uint16_t e = sheet_notes_end(sel);
+    uint16_t j;
+    uint8_t pitch = rec[on_idx].d1;
+    for (j = (uint16_t)(on_idx + 1u); j < e; j++)
+        if (mev_is_note_off(&rec[j]) && rec[j].d1 == pitch) { remove_rec(j); break; }
+    remove_rec(on_idx);
+}
 
 /* ghost notes: a key held while NOT recording shows its note at the
  * playhead until released (so you can see which note to start with).
@@ -314,49 +422,52 @@ static uint8_t n_sounding;
  * pending notes at the playhead first, so none are skipped by the
  * recompute.) */
 static void rec_note_on(uint8_t midi) {
-    uint16_t x = (uint16_t)timestamp;
-    uint16_t i, j;
-    for (i = 0; i < rec_n; ) {
-        if (!rec[i].is_jump && rec[i].midi == midi && rec[i].x + PUNCH_W >= x && rec[i].x <= x + PUNCH_W) {
-            for (j = i; j + 1u < rec_n; j++) rec[j] = rec[j + 1u];
-            rec_n--;
-        } else i++;
+    /* the note starts at the playhead, in ticks. */
+    uint32_t t = px_to_ticks(timestamp > REC_X_MAX ? REC_X_MAX : timestamp);
+    uint16_t b = sheet_notes_begin(sel), e = sheet_notes_end(sel), i;
+    for (i = b; i < e; i++) {
+        if (mev_is_note_on(&rec[i]) && rec[i].d1 == midi) {
+            uint32_t ax = mev_abs(rec, b, i);
+            if (ax + PUNCH_TICKS >= t && ax <= t + PUNCH_TICKS) {
+                remove_note_pair(i);   /* replay replaces, never stacks */
+                break;
+            }
+        }
     }
-    if (rec_n >= MAXREC) return;
-    for (i = rec_n; i > 0 && rec[i - 1u].x > x; i--) rec[i] = rec[i - 1u];
-    rec[i].x = x;
-    rec[i].ticks = 0;  /* open; closed by the note-off */
-    rec[i].midi = midi;
-    rec[i].is_jump = 0;
-    rec_n++;
+    if (rec_n + 2u > MAXREC) return;
+    /* a note is a pair: the off goes in first (at a default quarter
+     * note, moved by the note-off), then the on at the playhead. */
+    insert_ev_abs(b, sheet_notes_end(sel), t + 96u, MIDI_NOTE_OFF, midi, 0, 1);
+    insert_ev_abs(b, sheet_notes_end(sel), t, MIDI_NOTE_ON, midi, 100, 0);
     /* the playhead has passed the note just placed (it sounds via the
      * ghost), so the tick must not re-trigger it. */
-    pb_idx = 0;
-    while (pb_idx < rec_n && rec[pb_idx].x <= x) pb_idx++;
+    pb_idx = mev_find_abs(rec, sheet_notes_begin(sel), sheet_notes_end(sel), t, 0);
 }
 static void rec_note_off(uint8_t midi) {
-    uint16_t x = (uint16_t)timestamp;
-    uint16_t i;
-    for (i = rec_n; i-- > 0; ) {
-        if (!rec[i].is_jump && rec[i].midi == midi && !rec[i].ticks) {
-            uint32_t t = (x > rec[i].x ? x - rec[i].x : 0) * 96u / PXQ;
-            rec[i].ticks = t < 24u ? 24u : t > 384u ? 384u : (uint16_t)t;
+    /* close the note: move its Note Off to the playhead (clamped to
+     * a 24..384 tick duration, as before). The most recent Note On
+     * for this pitch is the one the held key placed. */
+    uint32_t t = px_to_ticks(timestamp > REC_X_MAX ? REC_X_MAX : timestamp);
+    uint16_t b = sheet_notes_begin(sel), e = sheet_notes_end(sel), i, j;
+    for (i = e; i-- > b; ) {
+        if (mev_is_note_on(&rec[i]) && rec[i].d1 == midi) {
+            uint32_t on_abs = mev_abs(rec, b, i);
+            uint32_t dur = t > on_abs ? t - on_abs : 0;
+            if (dur < 24u) dur = 24u;
+            if (dur > 384u) dur = 384u;
+            for (j = (uint16_t)(i + 1u); j < e; j++)
+                if (mev_is_note_off(&rec[j]) && rec[j].d1 == midi) { remove_rec(j); break; }
+            insert_ev_abs(b, sheet_notes_end(sel), on_abs + dur, MIDI_NOTE_OFF, midi, 0, 1);
             return;
         }
     }
 }
 
-/* remove the take entry at i (a note or a jump), closing the gap. */
-static void remove_rec(uint16_t i) {
-    uint16_t j;
-    if (i >= rec_n) return;
-    for (j = i; j + 1u < rec_n; j++) rec[j] = rec[j + 1u];
-    rec_n--;
-}
-/* does the take contain a jump? (the SEQ LED follows this) */
+/* does the current sheet's take contain a jump? (the SEQ LED follows this) */
 static uint8_t has_jump(void) {
     uint16_t i;
-    for (i = 0; i < rec_n; i++) if (rec[i].is_jump) return 1;
+    for (i = sheet_notes_begin(sel); i < sheet_notes_end(sel); i++)
+        if (mev_is_jump(&rec[i])) return 1;
     return 0;
 }
 
@@ -440,28 +551,29 @@ static uint8_t playhead_sound(uint32_t from, uint32_t to, uint8_t mode) {
          * notes in the jumped interval. Forward sounds (from, to],
          * backward sounds [to, from), so a note exactly on the
          * boundary sounds once per crossing. */
-        uint32_t lo = (to > from) ? from : to;
-        uint32_t hi = (to > from) ? to : from;
+        uint32_t lo = (to > from) ? px_to_ticks(from) : px_to_ticks(to);
+        uint32_t hi = (to > from) ? px_to_ticks(to) : px_to_ticks(from);
         uint8_t forward = (to > from);
-        for (i = 0; i < rec_n; ) {
+        uint16_t end = sheet_notes_end(sel);
+        uint32_t t_prev = 0;   /* absolute time of the event before i */
+        for (i = sheet_notes_begin(sel); i < end; ) {
+            uint32_t t = t_prev + rec[i].delta;   /* absolute time of rec[i] */
             uint8_t in_range;
-            if (forward) in_range = (rec[i].x > lo && rec[i].x <= hi);
-            else in_range = (rec[i].x >= lo && rec[i].x < hi);
-            if (!in_range) { i++; continue; }
-            if (rec[i].is_jump) {
-                if (delete_head) { remove_rec(i); continue; }
-                i++;
-            } else if (delete_head) {
-                remove_rec(i);   /* next entry shifts in; re-examine it */
-            } else {
-                trigger_note(rec[i].midi, 0, MODE_SCRUB);
-                i++;
-            }
+            if (forward) in_range = (t > lo && t <= hi);
+            else in_range = (t >= lo && t < hi);
+            if (!in_range) { t_prev = t; i++; continue; }
+            if (mev_is_jump(&rec[i])) {
+                if (delete_head) { remove_rec(i); end--; continue; }
+                t_prev = t; i++;
+            } else if (mev_is_note_on(&rec[i])) {
+                if (delete_head) { remove_note_pair(i); end = sheet_notes_end(sel); continue; }
+                trigger_note(rec[i].d1, 0, MODE_SCRUB);
+                t_prev = t; i++;
+            } else { t_prev = t; i++; }   /* a Note Off: nothing to sound */
         }
         /* After a jump, pb_idx restarts past the notes just sounded,
          * so the tick does not re-trigger them. */
-        pb_idx = 0;
-        while (pb_idx < rec_n && rec[pb_idx].x <= to) pb_idx++;
+        pb_idx = mev_find_abs(rec, sheet_notes_begin(sel), sheet_notes_end(sel), px_to_ticks(to), 0);
         return 0;
     }
     /* Forward or still: advance pb_idx through notes at or before `to`.
@@ -469,22 +581,41 @@ static uint8_t playhead_sound(uint32_t from, uint32_t to, uint8_t mode) {
      * tick sounds recorded notes, with their duration tracked; a key
      * press must not steal one and sound it untracked.) */
     if (mode == MODE_LIVE) return 0;
-    while (pb_idx < rec_n && rec[pb_idx].x <= to) {
-        if (rec[pb_idx].is_jump) {
-            if (delete_head) {
-                remove_rec(pb_idx);  /* next entry shifts in; re-examine it */
-            } else if (mode == MODE_PLAY) {
-                return 1;  /* the jump loops; the caller wraps the tape */
+    /* pb_idx stays inside the current sheet's block: notes of other
+     * sheets never sound here. `t` is the absolute time of the event
+     * at pb_idx; it advances by each event's delta, and is unchanged
+     * when the delete head removes an event (the next event inherits
+     * its delta, so its absolute time is the same). */
+    {
+        uint16_t b = sheet_notes_begin(sel), end = sheet_notes_end(sel);
+        uint32_t to_t = px_to_ticks(to);
+        uint32_t t = (pb_idx >= b && pb_idx < end) ? mev_abs(rec, b, pb_idx) : 0;
+        while (pb_idx < end && t <= to_t) {
+            if (mev_is_jump(&rec[pb_idx])) {
+                if (delete_head) {
+                    remove_rec(pb_idx); end--;   /* next event shifts in; re-examine it */
+                } else if (mode == MODE_PLAY) {
+                    return 1;  /* the jump loops; the caller wraps the tape */
+                } else {
+                    pb_idx++;  /* a key press does not loop on a jump */
+                    if (pb_idx < end) t += rec[pb_idx].delta;
+                }
+            } else if (mev_is_note_on(&rec[pb_idx])) {
+                if (delete_head) {
+                    remove_note_pair(pb_idx); end = sheet_notes_end(sel);
+                } else {
+                    uint8_t m = rec[pb_idx].d1;
+                    trigger_note(m, note_off_px(b, end, pb_idx, m, t), mode);
+                    pb_idx++;
+                    if (pb_idx < end) t += rec[pb_idx].delta;
+                }
             } else {
-                pb_idx++;  /* a key press does not loop on a jump */
+                /* a Note Off: its note turns off by end_x in tick();
+                 * a lone off here (its on is behind the playhead) is
+                 * just skipped, never deleted on its own. */
+                pb_idx++;
+                if (pb_idx < end) t += rec[pb_idx].delta;
             }
-        } else if (delete_head) {
-            remove_rec(pb_idx);   /* next entry shifts in; re-examine it */
-        } else {
-            uint8_t m = rec[pb_idx].midi;
-            uint32_t dur = (rec[pb_idx].ticks ? rec[pb_idx].ticks : 96u) * PXQ / 96u;
-            trigger_note(m, rec[pb_idx].x + dur, mode);
-            pb_idx++;
         }
     }
     return 0;
@@ -555,16 +686,26 @@ static void render_window(uint32_t sc) {
         int32_t ex = (int32_t)free_end_x - (int32_t)sc;
         if (ex >= 0 && ex < 240) ui_endbar((uint32_t)ex);
     }
-    for (i = 0; i < rec_n; i++) {
-        uint32_t sx;
-        if (rec[i].x < sc || rec[i].x >= sc + 240u) continue;
-        sx = rec[i].x - sc;
-        if (rec[i].is_jump) {
-            /* the jump: a double bar, the loop point of the take */
-            ui_bar(sx);
-            if (sx + 5u < 240u) ui_bar(sx + 5u);
-        } else {
-            ui_note(sx, rec[i].midi, rec[i].ticks ? rec[i].ticks : 96u);
+    /* the current sheet's take only: other sheets' notes never draw. */
+    {
+        uint16_t b = sheet_notes_begin(sel), e = sheet_notes_end(sel);
+        uint32_t t_prev = 0;   /* absolute time of the event before i */
+        for (i = b; i < e; i++) {
+            uint32_t t = t_prev + rec[i].delta;   /* absolute time, ticks */
+            uint32_t px, sx;
+            t_prev = t;
+            px = ticks_to_px(t);
+            if (px < sc || px >= sc + 240u) continue;
+            sx = px - sc;
+            if (mev_is_jump(&rec[i])) {
+                /* the jump: a double bar, the loop point of the take */
+                ui_bar(sx);
+                if (sx + 5u < 240u) ui_bar(sx + 5u);
+            } else if (mev_is_note_on(&rec[i])) {
+                uint32_t off_px = note_off_px(b, e, (uint16_t)i, rec[i].d1, t);
+                uint32_t dur_ticks = (off_px > px ? off_px - px : 0) * 96u / PXQ;
+                ui_note(sx, rec[i].d1, dur_ticks ? dur_ticks : 96u);
+            }
         }
     }
     for (i = 0; i < 27u; i++) {
@@ -685,8 +826,7 @@ static void set_velocity(uint32_t v) {
     if (v && !velocity) {
         /* starting to move: pb_idx restarts at the playhead, and
          * notes still sounding are silenced (a fresh start). */
-        pb_idx = 0;
-        while (pb_idx < rec_n && rec[pb_idx].x < timestamp) pb_idx++;
+        pb_idx = mev_find_abs(rec, sheet_notes_begin(sel), sheet_notes_end(sel), px_to_ticks(timestamp), 1);
         n_sounding = 0;
         last_frame_ms = fm1_ms;
     } else if (!v && velocity) {
@@ -716,9 +856,18 @@ static void toggle_rec(void) {
 static void loop_wrap(void) {
     silence_playback();
     timestamp = CURSOR_X; timestamp_frac = 0;
-    pb_idx = 0;
-    while (pb_idx < rec_n && rec[pb_idx].x < timestamp) pb_idx++;
-    while (pb_idx < rec_n && rec[pb_idx].is_jump && rec[pb_idx].x == timestamp) pb_idx++;
+    pb_idx = mev_find_abs(rec, sheet_notes_begin(sel), sheet_notes_end(sel), px_to_ticks(timestamp), 1);
+    while (pb_idx < sheet_notes_end(sel) && mev_is_jump(&rec[pb_idx]) &&
+           mev_abs(rec, sheet_notes_begin(sel), pb_idx) == px_to_ticks(timestamp)) pb_idx++;
+}
+
+/* the piece-x of the current sheet's last note (0 when the take is
+ * empty): the open take stops a screen-width past it. */
+static uint32_t last_take_px(uint8_t s) {
+    uint16_t b = sheet_notes_begin(s), i = sheet_notes_end(s);
+    while (i > b && !mev_is_note_on(&rec[i - 1u])) i--;
+    if (i == b) return 0;
+    return ticks_to_px(mev_abs(rec, b, (uint16_t)(i - 1u)));
 }
 
 /* one tick while the sheet moves: timestamp += velocity, then the
@@ -774,9 +923,10 @@ static void tick(void) {
             render_window(scroll_now());
             return;
         }
-        if (!has_end && is_free && rec_n > 0 && !keys_down &&
-            pb_idx >= rec_n && !n_sounding &&
-            px > rec[rec_n - 1u].x + END_TAIL_PX) {
+        if (!has_end && is_free && !keys_down &&
+            last_take_px(sel) > 0 &&   /* an empty sheet has no take to stop past */
+            pb_idx >= sheet_notes_end(sel) && !n_sounding &&
+            px > last_take_px(sel) + END_TAIL_PX) {
             /* open take, no marked end: stop past the last note.
              * This fires while recording too (not just PLAY): the old
              * ST_PLAY gate meant a free-play take never stopped. It
@@ -856,6 +1006,7 @@ static void knob_coarse_scroll(int32_t dir) {
 static void enter_piece_stopped(void) {
     setup_piece();
     timestamp = CURSOR_X; timestamp_frac = 0;
+    sheet_ts[sel] = CURSOR_X;   /* entering a piece starts at the beginning */
     velocity = 0;
     in_book = 0;
     render_window(0u);
@@ -865,22 +1016,20 @@ static void enter_piece_stopped(void) {
 /* SEQ: insert a jump at the playhead (or remove it, if one is already
  * there). The jump is a symbol in the take, like a note. */
 static void seq_jump(void) {
-    uint16_t x = (uint16_t)timestamp;
-    uint16_t i;
-    for (i = 0; i < rec_n; i++) {
-        if (rec[i].is_jump && rec[i].x + PUNCH_W >= x && rec[i].x <= x + PUNCH_W) {
-            remove_rec(i);
-            render_window(scroll_now());
-            return;
+    uint32_t t = px_to_ticks(timestamp > REC_X_MAX ? REC_X_MAX : timestamp);
+    uint16_t b = sheet_notes_begin(sel), e = sheet_notes_end(sel), i;
+    for (i = b; i < e; i++) {
+        if (mev_is_jump(&rec[i])) {
+            uint32_t ax = mev_abs(rec, b, i);
+            if (ax + PUNCH_TICKS >= t && ax <= t + PUNCH_TICKS) {
+                remove_rec(i);
+                render_window(scroll_now());
+                return;
+            }
         }
     }
     if (rec_n >= MAXREC) return;
-    for (i = rec_n; i > 0 && rec[i - 1u].x > x; i--) rec[i] = rec[i - 1u];
-    rec[i].x = x;
-    rec[i].ticks = 0;
-    rec[i].midi = 0;
-    rec[i].is_jump = 1;
-    rec_n++;
+    insert_ev_abs(b, e, t, MIDI_META, MIDI_META_MARKER, MIDI_MARKER_JUMP_LEN, 1);
     render_window(scroll_now());
 }
 
@@ -914,6 +1063,32 @@ static void on_key_up(uint8_t midi, uint32_t k) {
     if (had_ghost) render_window(scroll_now());
 }
 
+/* ---- per-sheet switching (SELECT from anywhere) ----
+ * Switching sheets never erases: the current sheet's playhead
+ * offset, tempo and marked end are saved, the new sheet's are
+ * restored. On the tape the timestamp jumps to the new sheet's saved
+ * offset and the velocity follows its tempo; in the book the tape is
+ * not running, so only the layout and tempo change (the tape still
+ * starts at the beginning when PLAY enters it). */
+static void save_sheet_state(void) {
+    sheet_ts[sel] = timestamp;
+    sheet_tempo[sel] = tempo;
+    sheet_end_set[sel] = free_end_set;
+    sheet_end_x[sel] = free_end_x;
+}
+static void restore_sheet_state(void) {
+    tempo = sheet_tempo[sel];
+    free_end_set = sheet_end_set[sel];
+    free_end_x = sheet_end_x[sel];
+    if (!in_book) {
+        timestamp = sheet_ts[sel];
+        timestamp_frac = 0;
+        if (moving()) velocity = tempo * PXQ;
+        silence_playback();
+        pb_idx = mev_find_abs(rec, sheet_notes_begin(sel), sheet_notes_end(sel), px_to_ticks(timestamp), 1);
+    }
+}
+
 /* ---- main ---- */
 #define SAVE_THROTTLE_MS 10000u  /* at most one settings save per 10 s */
 #define FRAME_MS 33u             /* the tape advances ~30 times a second */
@@ -938,9 +1113,18 @@ static void app_main(void) {
         drill_lesson.event_count = drill_generate(&dp, drill_lesson.events, LESSON_MAX_EVENTS);
         pieces[5] = &drill_lesson;
     }
+    rec_init();   /* one unified list: NBOOK empty End-of-Track blocks */
+    for (i = 0; i < NBOOK; i++) {
+        sheet_ts[i] = CURSOR_X;
+        /* a slot with no lesson (a short book) falls back to the
+         * free-play tempo; the book never has a hole in practice. */
+        sheet_tempo[i] = (i == FREE_IDX || !pieces[i]) ? FREE_TEMPO : pieces[i]->tempo;
+        sheet_end_set[i] = 0;
+        sheet_end_x[i] = 0;
+    }
     mset_load(&set);
     sel = set.sel;   /* the saved book selection (clamped by the load) */
-    if (sel >= NBOOK) sel = 0;
+    if (sel >= NBOOK || (sel < NPIECES && !pieces[sel])) sel = 0;
     select_piece();
 
     leds_update();  /* the panel lights follow the state */
@@ -952,16 +1136,31 @@ static void app_main(void) {
         platform_poll();
 
         e = fm1_enc_take(ENC_SELECT);
-        if (e && in_book) {
+        if (e) {
+            /* SELECT switches sheets from anywhere -- in the book or
+             * on the tape -- and never erases: the take, the playhead
+             * offset and the tempo are per sheet. */
             int32_t s = (int32_t)sel + e;
-            while (s < 0) s += NBOOK;
-            sel = (uint8_t)(s % NBOOK);
-            rec_n = 0;  /* new piece, new tape */
-            free_end_set = 0; free_end_x = 0;
-            select_piece();
-            render_book();
-            set.sel = sel;   /* the selection persists across reboots */
-            set_dirty = 1;
+            int32_t dir = (e > 0) ? 1 : -1;
+            /* a slot with no lesson is skipped (a short book); the
+             * drill always fills a slot, so this terminates. */
+            for (;;) {
+                while (s < 0) s += NBOOK;
+                s %= NBOOK;
+                if (s >= (int32_t)NPIECES || pieces[s]) break;
+                s += dir;
+            }
+            if ((uint8_t)s != sel) {
+                if (!in_book) save_sheet_state();
+                else { sheet_tempo[sel] = tempo; sheet_end_set[sel] = free_end_set; sheet_end_x[sel] = free_end_x; }
+                sel = (uint8_t)(s % NBOOK);
+                setup_piece();
+                restore_sheet_state();
+                if (in_book) render_book();
+                else render_window(scroll_now());
+                set.sel = sel;   /* the selection persists across reboots */
+                set_dirty = 1;
+            }
         }
         e = fm1_enc_take(ENC_KNOB1);
         if (e) {
@@ -972,6 +1171,7 @@ static void app_main(void) {
             if (t > (int32_t)TEMPO_MAX) t = (int32_t)TEMPO_MAX;
             if (t != (int32_t)tempo) {
                 tempo = (uint32_t)t;
+                sheet_tempo[sel] = tempo;   /* the tempo is per sheet */
                 if (moving()) velocity = (uint32_t)tempo * PXQ;
                 show_tempo();
             }
@@ -1022,6 +1222,7 @@ static void app_main(void) {
             if (in_book) {
                 setup_piece();
                 timestamp = CURSOR_X; timestamp_frac = 0;
+                sheet_ts[sel] = CURSOR_X;   /* entering a piece starts at the beginning */
                 in_book = 0;
                 render_window(0u);
             }
@@ -1034,6 +1235,7 @@ static void app_main(void) {
             if (in_book) {
                 setup_piece();
                 timestamp = CURSOR_X; timestamp_frac = 0;
+                sheet_ts[sel] = CURSOR_X;   /* entering a piece starts at the beginning */
                 in_book = 0;
                 render_window(0u);
             }
@@ -1073,6 +1275,7 @@ static void app_main(void) {
                 save_if_dirty();
                 setup_piece();
                 timestamp = CURSOR_X; timestamp_frac = 0;
+                sheet_ts[sel] = CURSOR_X;   /* HOME rewinds the sheet */
                 velocity = 0; rec_write = 0;
                 in_book = 1;
                 render_book();
@@ -1080,10 +1283,12 @@ static void app_main(void) {
                 save_if_dirty();
                 if (timestamp > CURSOR_X) {
                     timestamp = CURSOR_X; timestamp_frac = 0;
+                    sheet_ts[sel] = CURSOR_X;   /* HOME rewinds the sheet */
                     render_window(0u);
                 } else {
                     setup_piece();
                     timestamp = CURSOR_X; timestamp_frac = 0;
+                    sheet_ts[sel] = CURSOR_X;   /* HOME rewinds the sheet */
                     velocity = 0; rec_write = 0;
                     in_book = 1;
                     render_book();
