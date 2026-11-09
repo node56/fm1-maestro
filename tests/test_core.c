@@ -1,18 +1,49 @@
-/* Host unit tests for the platform-independent core:
- * lesson parser + practice engine, drill generator, grading, CRC32.
- * gcc -Wall -Wextra -std=c99 -I ../firmware/src test_core.c \
- *     ../firmware/src/lesson.c ../firmware/src/drills.c \
- *     ../firmware/src/grade.c ../firmware/src/store.c ../firmware/src/ui.c \
- *     host_stub.c -o test_core && ./test_core
- * (ui.c is included so the whole app still compiles; it draws nothing here.)
+/* Host unit tests for the platform-independent core: the drill
+ * generator and the persistent settings (flash blob 0).
+ *
+ * The lesson format is parsed at build time by tools/lessons2c.py --
+ * there is no runtime lesson parser, practice engine, or grading
+ * in the firmware any more, so there is nothing to unit-test there.
+ * The screen, sound, transport, knobs, and presets are covered by
+ * the host-mode scripted tests (tests/scripts in the Dinghy build
+ * tree) run from the build tree.
+ *
+ * gcc -Wall -Wextra -std=c99 -I ../firmware/src test_core.c -o test_core
+ * ./test_core
+ *
+ * store.c and drills.c are #included, so this is one translation
+ * unit. store.c calls blob_load/blob_save; the stubs below back
+ * blob 0 with a RAM buffer. (mset_crc32 comes along with store.c,
+ * which lets the bad-magic test build a blob with a valid CRC.)
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "lesson.h"
 #include "drills.h"
-#include "grade.h"
-#include "store.h"
+#include "mstore.h"
+
+/* ---- stub flash blob 0 (RAM-backed) ---- */
+static uint8_t blob_buf[64];
+static int blob_present = 0;
+
+static int blob_load(uint32_t i, void *p, uint32_t n) {
+    if (i != 0u || !blob_present) return -1;
+    if (n > sizeof blob_buf) n = sizeof blob_buf;
+    memcpy(p, blob_buf, n);
+    return 0;
+}
+static int blob_save(uint32_t i, const void *p, uint32_t n) {
+    if (i != 0u) return -1;
+    if (n > sizeof blob_buf) n = sizeof blob_buf;
+    memcpy(blob_buf, p, n);
+    blob_present = 1;
+    return 0;
+}
+
+#include "store.c"
+#include "drills.c"
 
 static int failures = 0;
 #define CHECK(cond) do { \
@@ -22,76 +53,7 @@ static int failures = 0;
     } \
 } while (0)
 
-static const char *L01_TEXT =
-    "title: First Five Notes\n"
-    "kind: melody\n"
-    "source: Original exercise\n"
-    "level: 0\n"
-    "hand: right\n"
-    "position: C5\n"
-    "tempo: 72\n"
-    "time: 4/4\n"
-    "notes:\n"
-    "C5 q | D5 q | E5 q | F5 q |\n"
-    "G5 q | F5 q | E5 q | D5 q |\n"
-    "C5 h | R h |\n";
-
-static void test_parse(void) {
-    lesson_t l;
-    int rc = lesson_parse(L01_TEXT, &l);
-    CHECK(rc == 0);
-    CHECK(l.event_count == 10);
-    CHECK(l.kind == KIND_MELODY);
-    CHECK(l.level == 0);
-    CHECK(l.tempo == 72);
-    CHECK(l.beats_per_bar == 4);
-    CHECK(l.position_midi == 60);          /* C5 == middle C */
-    CHECK(strcmp(l.title, "First Five Notes") == 0);
-    CHECK(l.events[0].midi == 60 && l.events[0].ticks == 96);
-    CHECK(l.events[4].midi == 67);        /* G5 */
-    CHECK(l.events[8].midi == 60 && l.events[8].ticks == 192);
-    CHECK(l.events[9].is_rest && l.events[9].ticks == 192);
-}
-
-static void test_parse_errors(void) {
-    lesson_t l;
-    CHECK(lesson_parse("title: x\nkind: bogus\ntempo: 72\ntime: 4/4\n"
-                       "position: C5\nnotes:\nC5 q\n", &l) == -5);
-    CHECK(lesson_parse("title: x\nkind: melody\ntempo: 72\ntime: 4/4\n"
-                       "position: C5\nnotes:\nH5 q\n", &l) == -3);
-    CHECK(lesson_parse("title: x\nkind: melody\ntempo: 72\ntime: 4/4\n"
-                       "position: C5\nnotes:\nC5 z\n", &l) == -4);
-}
-
-static void test_practice(void) {
-    lesson_t l;
-    practice_t p;
-    const lesson_event_t *ev;
-    CHECK(lesson_parse(L01_TEXT, &l) == 0);
-    practice_start(&p, &l);
-    ev = practice_current(&p);
-    CHECK(ev && ev->midi == 60);
-    CHECK(practice_play(&p, 61) == 0);    /* wrong pitch: stays */
-    CHECK(practice_play(&p, 60) == 1);    /* right: advances */
-    ev = practice_current(&p);
-    CHECK(ev && ev->midi == 62);
-    /* play through the remaining notes */
-    {
-        static const uint8_t seq[] = { 62, 64, 65, 67, 65, 64, 62, 60 };
-        uint8_t i;
-        for (i = 0; i < 8; i++)
-            CHECK(practice_play(&p, seq[i]) == 1);
-    }
-    /* only the trailing rest remains; jump the clock past it.
-     * (rests are skipped lazily inside practice_current, as the
-     * app's per-frame call does) */
-    CHECK(!practice_done(&p));
-    practice_set_now(&p, 100000);
-    CHECK(practice_current(&p) == NULL);
-    CHECK(practice_done(&p));
-    CHECK(practice_play(&p, 60) == -1);
-}
-
+/* ---- drills: deterministic, in range, resolves to the root ---- */
 static void test_drills(void) {
     drill_params_t dp = { 60, 4, 96, 4, 4, RHY_Q | RHY_E, 1, 12345 };
     lesson_event_t a[128], b[128];
@@ -99,7 +61,14 @@ static void test_drills(void) {
     na = drill_generate(&dp, a, 128);
     nb = drill_generate(&dp, b, 128);
     CHECK(na > 0 && na == nb);
-    CHECK(memcmp(a, b, na * sizeof(a[0])) == 0);   /* deterministic */
+    /* deterministic: same seed -> same events. Compared field by
+     * field -- memcmp would also compare the struct's uninitialised
+     * padding bytes, which drill_generate never writes. */
+    for (i = 0; i < na; i++) {
+        CHECK(a[i].midi == b[i].midi);
+        CHECK(a[i].ticks == b[i].ticks);
+        CHECK(a[i].is_rest == b[i].is_rest);
+    }
     for (i = 0; i < na; i++) {
         if (!a[i].is_rest)
             CHECK(a[i].midi >= 60 && a[i].midi <= 64);
@@ -111,39 +80,104 @@ static void test_drills(void) {
     CHECK(i > 0 && a[i - 1].midi == 60);
 }
 
-static void test_grade(void) {
-    grade_t g;
-    int i;
-    CHECK(timing_window_ms(0) == 160);
-    CHECK(timing_window_ms(5) == 70);
-    grade_init(&g);
-    for (i = 0; i < 10; i++) grade_note(&g, 1, 0, 2);
-    CHECK(g.score == 10000);
-    CHECK(g.notes_hit == 10);
-    CHECK(g.best_streak == 10);
-    CHECK(grade_stars(&g) == 3);
-    grade_init(&g);
-    for (i = 0; i < 10; i++) grade_note(&g, 0, 0, 0);
-    CHECK(g.score == 6000);
-    CHECK(grade_stars(&g) == 0);
-    grade_init(&g);
-    grade_note(&g, 1, 500, 0);   /* way outside the 160ms window */
-    CHECK(g.notes_hit == 0 && g.streak == 0);
+/* ---- settings: defaults on an empty blob ---- */
+static void test_settings_defaults(void) {
+    settings_t s;
+    blob_present = 0;
+    mset_load(&s);
+    CHECK(s.speed_idx == 2);
+    CHECK(s.level == 2);
+    CHECK(s.sel == 0);
 }
 
-static void test_crc(void) {
-    CHECK(crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);
-    CHECK(ticks_to_ms(96, 120) == 500);
-    CHECK(ticks_to_ms(48, 96) == 312);
+/* ---- settings: save then load round-trips, including sel ----
+ * (sel used to be written to the blob never and restored never --
+ * the book selection reset to 0 on every reboot despite the blob
+ * having a sel field. This test pins the fix.) */
+static void test_settings_roundtrip(void) {
+    settings_t s, t;
+    blob_present = 0;
+    memset(&s, 0, sizeof s);
+    s.speed_idx = 1;
+    s.level = 4;
+    s.sel = 6;              /* free play */
+    mset_save(&s);
+    memset(&t, 0, sizeof t);
+    mset_load(&t);
+    CHECK(t.speed_idx == 1);
+    CHECK(t.level == 4);
+    CHECK(t.sel == 6);
+    /* and again for a book piece */
+    s.sel = 3;
+    mset_save(&s);
+    memset(&t, 0, sizeof t);
+    mset_load(&t);
+    CHECK(t.sel == 3);
+}
+
+/* ---- settings: out-of-range values clamp to defaults on load ---- */
+static void test_settings_clamp(void) {
+    settings_t s, t;
+    blob_present = 0;
+    memset(&s, 0, sizeof s);
+    s.speed_idx = 9;        /* > 4 */
+    s.level = 9;            /* > 5 */
+    s.sel = 9;              /* > 6 */
+    mset_save(&s);          /* saved as-is, with a valid CRC */
+    memset(&t, 0, sizeof t);
+    mset_load(&t);
+    CHECK(t.speed_idx == 2);
+    CHECK(t.level == 2);
+    CHECK(t.sel == 0);
+}
+
+/* ---- settings: a corrupted blob falls back to defaults ---- */
+static void test_settings_crc(void) {
+    settings_t s, t;
+    blob_present = 0;
+    memset(&s, 0, sizeof s);
+    s.sel = 5;
+    mset_save(&s);
+    blob_buf[5] ^= 0xFFu;   /* corrupt one settings byte, CRC now wrong */
+    memset(&t, 0, sizeof t);
+    mset_load(&t);
+    CHECK(t.speed_idx == 2);
+    CHECK(t.level == 2);
+    CHECK(t.sel == 0);
+}
+
+/* ---- settings: valid CRC but bad magic falls back to defaults ---- */
+static void test_settings_magic(void) {
+    settings_t s, t;
+    uint32_t c;
+    uint8_t buf[sizeof(settings_t) + 4];
+    blob_present = 0;
+    memset(&s, 0, sizeof s);
+    s.sel = 5;
+    mset_save(&s);
+    /* rebuild the blob by hand: bad magic, correct CRC over it */
+    memcpy(buf, blob_buf, sizeof buf);
+    buf[0] = 0x00u; buf[1] = 0x00u; buf[2] = 0x00u; buf[3] = 0x00u;
+    c = mset_crc32(buf, sizeof(settings_t));
+    buf[sizeof(settings_t)] = (uint8_t)c;
+    buf[sizeof(settings_t) + 1] = (uint8_t)(c >> 8);
+    buf[sizeof(settings_t) + 2] = (uint8_t)(c >> 16);
+    buf[sizeof(settings_t) + 3] = (uint8_t)(c >> 24);
+    memcpy(blob_buf, buf, sizeof buf);
+    memset(&t, 0, sizeof t);
+    mset_load(&t);
+    CHECK(t.speed_idx == 2);
+    CHECK(t.level == 2);
+    CHECK(t.sel == 0);
 }
 
 int main(void) {
-    test_parse();
-    test_parse_errors();
-    test_practice();
     test_drills();
-    test_grade();
-    test_crc();
+    test_settings_defaults();
+    test_settings_roundtrip();
+    test_settings_clamp();
+    test_settings_crc();
+    test_settings_magic();
     if (failures == 0) printf("all tests passed\n");
     return failures != 0;
 }

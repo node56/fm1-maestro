@@ -1,7 +1,8 @@
 # Lesson file format
 
-Plain text, hand-editable, parsed by `firmware/src/lesson.c` and by
-`tools/lessons2c.py`. One file per lesson.
+Plain text, hand-editable, parsed at build time by
+`tools/lessons2c.py` into `firmware/src/lessons_data.c`. One file per
+lesson. There is no runtime lesson parser in the firmware.
 
 ```
 # lines starting with '#' are comments
@@ -22,7 +23,7 @@ C5 h | R h |
 ## Notes
 
 `A`–`G` with optional `#`/`b` and an octave digit. Octave convention:
-**C5 == MIDI 60 (middle C)** — the same convention the C parser uses.
+**C5 == MIDI 60 (middle C)**.
 
 ## Durations (ticks; quarter = 96)
 

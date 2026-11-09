@@ -16,9 +16,9 @@
 #include <stdint.h>
 
 /* staff geometry (240x240) */
-#define STAFF_TOP 116u       /* F6, top line */
+#define STAFF_TOP 116u       /* F5, top line */
 #define STAFF_SPC 14u        /* line spacing */
-#define STAFF_BOT 172u       /* E5, bottom line */
+#define STAFF_BOT 172u       /* E4, bottom line */
 #define TITLE_Y 10u
 
 /* the scroll region: only this band moves; title/cursor/text are static */

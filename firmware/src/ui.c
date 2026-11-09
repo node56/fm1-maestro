@@ -125,6 +125,10 @@ static void flag_up(uint32_t x, uint32_t y) {
     for (i = 0; i < 10u; i++) px(x + 6u + i, y - 35u + i);
 }
 
+/* dotted note values (quarter = 96 ticks): the dot after a notehead */
+#define TICKS_DOTTED_Q 144u   /* dotted quarter */
+#define TICKS_DOTTED_H 288u   /* dotted half */
+
 void ui_note(uint32_t x, int32_t midi, uint32_t ticks) {
     int32_t dia = ui_dia(midi);
     uint32_t y = ui_y_of(dia);
@@ -133,7 +137,7 @@ void ui_note(uint32_t x, int32_t midi, uint32_t ticks) {
     head(x, y, open);
     if (ticks < 384u) stem(x, y, dia);
     if (ticks <= 48u) flag_up(x, y);
-    if (ticks == 144u || ticks == 288u) {
+    if (ticks == TICKS_DOTTED_Q || ticks == TICKS_DOTTED_H) {
         px(x + 11u, y - 3u); px(x + 12u, y - 3u);
         px(x + 11u, y - 2u); px(x + 12u, y - 2u);
     }

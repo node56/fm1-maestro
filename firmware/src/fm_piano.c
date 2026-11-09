@@ -251,6 +251,9 @@ typedef struct {
     uint8_t rsadj;  /* rate-scaling adjustment, R units, for this note */
 } fm_op_t;
 
+/* a voice already playing this note louder than this (carrier-gain
+ * sum, Q15 units) is retriggered instead of stealing another voice. */
+#define VOICE_RETRIG_ENV 1000
 #define NV 6u
 static struct {
     fm_op_t op[6];
@@ -275,20 +278,21 @@ static int32_t fsin(uint32_t ph) {
 }
 
 /* phase increment for a ratio code, with an overflow clamp
- * (Nyquist, effectively silent) past the top of the keyboard. */
+ * (Nyquist, effectively silent) past the top of the keyboard.
+ * The clamp is (2^32-1)/mult, so the shift-and-add product fits. */
 static uint32_t ratio_inc(uint32_t base, uint8_t mult) {
     switch (mult) {
     case 1:  /* x3.00 = 2+1 */
-        if (base > 1431655765u) return 0xFFFFFFFFu;
+        if (base > 0xFFFFFFFFu / 3u) return 0xFFFFFFFFu;
         return (base << 1) + base;
     case 2:  /* x5.00 = 4+1 */
-        if (base > 858993459u) return 0xFFFFFFFFu;
+        if (base > 0xFFFFFFFFu / 5u) return 0xFFFFFFFFu;
         return (base << 2) + base;
     case 3:  /* x11.00 = 8+2+1 */
-        if (base > 390451572u) return 0xFFFFFFFFu;
+        if (base > 0xFFFFFFFFu / 11u) return 0xFFFFFFFFu;
         return (base << 3) + (base << 1) + base;
     case 4:  /* x14.00 = 8+4+2 */
-        if (base > 306783378u) return 0xFFFFFFFFu;
+        if (base > 0xFFFFFFFFu / 14u) return 0xFFFFFFFFu;
         return (base << 3) + (base << 2) + (base << 1);
     case 5:  /* x1.58 = 1 + 1/2 + 1/16 + 1/64 + 1/512 = 1.58008 */
         return base + (base >> 1) + (base >> 4) + (base >> 6) + (base >> 9);
@@ -327,23 +331,28 @@ static int8_t vel_ol_offset(uint8_t vel, uint8_t kvs) {
     return (int8_t)(sv >> 5);
 }
 
-/* GAIN_T index, clamped to the table (0..198). */
+/* GAIN_T index, clamped to the table. */
+#define GAIN_T_MAX (sizeof GAIN_T / sizeof GAIN_T[0] - 1u)
 static uint32_t gain_idx(uint32_t idx) {
-    if (idx > 198u) idx = 198u;
+    if (idx > GAIN_T_MAX) idx = GAIN_T_MAX;
     return idx;
 }
 
-/* one envelope step for one operator. */
+/* one envelope step for one operator. The level moves toward its
+ * target by (target-level)>>shift per sample; within EG_SNAP of
+ * the target it snaps to it, so the exponential approach finishes
+ * instead of creeping forever by fractions of a Q15.16 unit. */
+#define EG_SNAP 512   /* Q15.16 units: 1/128 of a Q15 gain unit */
 static void eg_step(fm_op_t *o, const fmop_t *p) {
     int32_t diff;
     if (o->seg >= 4) return;
     diff = o->tgt - o->eg;
-    if (diff > 512) {
+    if (diff > EG_SNAP) {
         int32_t step = diff >> o->sh;
         if (step < 1) step = 1;
         o->eg += step;
         if (o->eg > o->tgt) o->eg = o->tgt;
-    } else if (diff < -512) {
+    } else if (diff < -EG_SNAP) {
         int32_t step = (-diff) >> o->sh;
         if (step < 1) step = 1;
         o->eg -= step;
@@ -370,7 +379,11 @@ static void piano_on(uint8_t note, uint8_t vel) {
     routes_init();
     P = &PATCHES[cur_preset];
     for (v = 0; v < NV; v++) {
-        uint32_t score = (voice[v].note == note && voice[v].env > 1000)
+        /* Voice stealing: a voice already playing this note loudly
+         * is retriggered (so a repeated note does not stack two
+         * voices on one pitch); otherwise the quietest voice goes.
+         * env is the carrier-gain sum, Q15 units. */
+        uint32_t score = (voice[v].note == note && voice[v].env > VOICE_RETRIG_ENV)
             ? 0u : (uint32_t)voice[v].env + 1u;
         if (score < best) { best = score; pick = v; }
     }
@@ -472,7 +485,10 @@ static void app_audio(int32_t *out, uint32_t n) {
                 }
                 op[o].ph += op[o].inc;
             }
-            /* the carriers, mixed and velocity-scaled. */
+            /* the carriers, mixed and velocity-scaled. >> 2 is
+             * headroom for the carrier sum (up to 3 carriers, each
+             * up to Q15 full scale) so it cannot clip before the
+             * velocity scale brings it back down. */
             {
                 int32_t s = vout >> 2;
                 s = (s * (int32_t)voice[v].vel) >> 7;

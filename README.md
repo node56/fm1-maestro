@@ -23,9 +23,7 @@ firmware/src/maestro.c      ◀── platform.c ────┤ (Dinghy templat
   app_main()   screen + keys                    boot, USB, MIDI,
   app_audio()  sound                             screen, storage)
        │
-       ├── lesson.c   parse + step through a lesson, expected-note stream
        ├── drills.c   seeded generator: infinite sight-reading & rhythm drills
-       ├── grade.c    pitch + timing scoring (integer math only — no FPU)
        └── ui.c       240×240 screens: select / practice / results
 ```
 

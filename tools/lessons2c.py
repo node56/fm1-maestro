@@ -3,9 +3,8 @@
 
 Usage: python3 tools/lessons2c.py lessons/ -o firmware/src/lessons_data.c
 
-Mirrors firmware/src/lesson.c's parser (same format, same C5==60
-convention, same tick values). Fails loudly on anything the C parser
-would reject.
+Implements the format in lessons/format.md (same C5==60 convention,
+same tick values). Fails loudly on anything malformed.
 """
 import re
 import sys

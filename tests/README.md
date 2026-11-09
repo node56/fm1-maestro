@@ -4,15 +4,16 @@
 
 ```sh
 cd tests
-gcc -Wall -Wextra -std=c99 -I ../firmware/src test_core.c \
-    ../firmware/src/lesson.c ../firmware/src/drills.c \
-    ../firmware/src/grade.c ../firmware/src/store.c \
-    ../firmware/src/ui.c host_stub.c -o test_core
+gcc -Wall -Wextra -std=c99 -I ../firmware/src test_core.c -o test_core
 ./test_core
 ```
 
-Covers: lesson parsing (incl. error cases), the practice engine,
-drill determinism + invariants, grading math, CRC32, tick conversion.
+`test_core.c` #includes `store.c` and `drills.c`, so it is one
+translation unit; `blob_load`/`blob_save` are stubbed with a RAM
+buffer above the includes. Covers: drill determinism + invariants,
+and the persistent settings (flash blob 0) — defaults on an empty
+or bad blob, save/load round-trip including `sel` persistence,
+clamping of out-of-range values, CRC and magic validation.
 
 ## Host mode (needs the Dinghy template)
 

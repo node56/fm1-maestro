@@ -13,8 +13,9 @@ On GitHub, open [zvenson/dinghy](https://github.com/zvenson/dinghy) →
 ```sh
 git clone <your-repo-url> fm1-maestro && cd fm1-maestro
 # copy: README.md SETUP.md LICENSE LICENSING.md docs/ lessons/
-#        firmware/src/maestro.c firmware/src/{lesson,drills,grade,ui}.* 
-#        firmware/src/store.h tools/lessons2c.py web-installer/ tests/
+#        firmware/src/maestro.c firmware/src/{drills,ui,fm_piano,store}.*
+#        firmware/src/{drills,fm_tables,glyphs,lesson,mstore}.h
+#        tools/lessons2c.py web-installer/ tests/
 # (keep the template's platform.c, hal/, build.sh, tools/fm1_install.py,
 #  .github/workflows, tests/run_host.sh, tests/run_tests.sh)
 ```
@@ -42,8 +43,9 @@ sound → WAV, scripted keys/knobs/MIDI.
 
 ```sh
 # pure-C core unit checks (no platform needed):
-gcc -Wall -Wextra -std=c99 -I firmware/src -c firmware/src/lesson.c \
-    firmware/src/drills.c firmware/src/grade.c
+cd tests
+gcc -Wall -Wextra -std=c99 -I ../firmware/src test_core.c -o test_core
+./test_core
 
 # full host run (from the template):
 tests/run_host.sh        # → build/host/*.png, build/host/*.wav

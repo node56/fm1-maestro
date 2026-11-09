@@ -14,37 +14,36 @@ static uint32_t mset_crc32(const uint8_t *p, uint32_t n) {
 }
 
 void mset_load(settings_t *s) {
-        s->magic = 0;
+    uint8_t buf[sizeof(settings_t) + 4];
+    uint32_t stored_crc;
+    settings_t tmp;
+    /* defaults (an empty or bad blob leaves these) */
+    s->magic = 0;
     s->reserved = 0;
     s->speed_idx = 2;
     s->level = 2;
     s->sel = 0;
-    {
-        uint8_t buf[sizeof(settings_t) + 4];
-        if (blob_load(0u, buf, sizeof buf) < 0) return;
-        if (mset_crc32(buf, sizeof(settings_t)) !=
-            ((uint32_t)buf[sizeof(settings_t)] | ((uint32_t)buf[sizeof(settings_t) + 1] << 8) |
-             ((uint32_t)buf[sizeof(settings_t) + 2] << 16) | ((uint32_t)buf[sizeof(settings_t) + 3] << 24)))
-            return;
-        {
-            settings_t tmp;
-            uint8_t *d = (uint8_t *)&tmp, k;
-            for (k = 0; k < sizeof tmp; k++) d[k] = buf[k];
-            if (tmp.magic != SET_MAGIC) return;
-            *s = tmp;
-            if (s->speed_idx > 4u) s->speed_idx = 2;
-            if (s->level > 5u) s->level = 2;
-            if (s->sel > 6u) s->sel = 0;
-        }
-    }
+    if (blob_load(0u, buf, sizeof buf) < 0) return;
+    stored_crc = (uint32_t)buf[sizeof(settings_t)]
+        | ((uint32_t)buf[sizeof(settings_t) + 1] << 8)
+        | ((uint32_t)buf[sizeof(settings_t) + 2] << 16)
+        | ((uint32_t)buf[sizeof(settings_t) + 3] << 24);
+    if (mset_crc32(buf, sizeof(settings_t)) != stored_crc) return;
+    /* load into a scratch copy and validate the magic before
+     * overwriting the defaults, so a bad blob cannot clobber them. */
+    memcpy(&tmp, buf, sizeof tmp);
+    if (tmp.magic != SET_MAGIC) return;
+    *s = tmp;
+    if (s->speed_idx > 4u) s->speed_idx = 2;
+    if (s->level > 5u) s->level = 2;
+    if (s->sel > 6u) s->sel = 0;
 }
 
 void mset_save(settings_t *s) {
     uint8_t buf[sizeof(settings_t) + 4];
-    uint8_t *d = (uint8_t *)s, k;
     uint32_t c;
     s->magic = SET_MAGIC;
-    for (k = 0; k < sizeof *s; k++) buf[k] = d[k];
+    memcpy(buf, s, sizeof *s);
     c = mset_crc32(buf, sizeof(settings_t));
     buf[sizeof(settings_t)] = (uint8_t)c;
     buf[sizeof(settings_t) + 1] = (uint8_t)(c >> 8);
