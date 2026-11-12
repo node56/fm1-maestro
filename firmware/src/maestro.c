@@ -85,6 +85,12 @@
  * always; the rest sit at a dim glow. The 27 key LEDs sit at a dim
  * glow (the backlight).
  *
+ * Idle: after IDLE_BLACK_MS (2 minutes) with no key, button or
+ * encoder input, the screen fills black and nothing draws. Any
+ * input wakes it and repaints the current frame in full, and the
+ * waking input acts normally too. Only the display blanks -- a
+ * playing tape keeps playing; nothing stops, pauses or resets.
+ *
  * Rendering is positional: render_window(sc) draws whatever is at scroll
  * position sc, forward or backward. Nothing is ever "reset" on PLAY/REC;
  * they just set the velocity and whether notes are stored.
@@ -217,6 +223,17 @@ static uint8_t delete_head = 0;  /* EDIT: the playhead erases instead of playing
 static uint32_t preset_notice_until;  /* fm1_ms until the patch name clears */
 static uint32_t keys_down;   /* bit k = key k currently down (main loop) */
 
+/* ---- idle: blank the screen when nobody is touching the device ----
+ * Any key press, button press or encoder detent is input and resets
+ * the timer. After IDLE_BLACK_MS with no input the screen fills
+ * black and nothing draws until the next input, which repaints the
+ * current frame in full (redraw_now). Only the display blanks: the
+ * transport and the audio are untouched, so a playing tape keeps
+ * playing behind the black screen. */
+#define IDLE_BLACK_MS 120000u  /* idle this long (2 min): the screen goes black */
+static uint32_t last_input_ms;   /* fm1_ms of the last input */
+static uint8_t screen_blank;     /* 1 = blanked: the draw entry points all no-op */
+
 /* moving = the timestamp advances; recording = notes are stored. */
 static uint8_t moving(void) { return velocity != 0; }
 static uint8_t recording(void) { return rec_write; }
@@ -239,6 +256,7 @@ static uint8_t key_midi(uint32_t k) {
 
 static int8_t shown_oct = 99;  /* sentinel: force the first octave draw */
 static void show_oct(void) {
+    if (screen_blank) return;   /* shown_oct stays stale, so it redraws on wake */
     if (oct_shift != shown_oct) {
         shown_oct = oct_shift;
         ui_oct(oct_shift);
@@ -265,6 +283,7 @@ static uint8_t set_dirty = 0;
 /* the tempo on screen, always. Redraws only when it changes
  * (the LCD persists between frames). */
 static void show_tempo(void) {
+    if (screen_blank) return;
     if (tempo != shown_bpm) {
         shown_bpm = tempo;
         ui_tempo(tempo);
@@ -283,6 +302,7 @@ static const char *hint_for_transport(void) {
     return "PLAY go REC off";  /* stopped, recording (armed) */
 }
 static void show_hint(void) {
+    if (screen_blank) return;
     if (preset_notice_until && fm1_ms < preset_notice_until) return;
     ui_hint(hint_for_transport());
 }
@@ -291,8 +311,9 @@ static void show_hint(void) {
  * The name only ever covers the hint strip (x < 180); the tempo
  * readout at x=180 is never erased, so there is nothing to redraw. */
 static void show_preset(void) {
-    ui_preset(piano_preset_name());
     preset_notice_until = fm1_ms + PRESET_NOTICE_MS;
+    if (screen_blank) return;   /* the notice still arms; the name draws on wake */
+    ui_preset(piano_preset_name());
 }
 
 /* the take: MIDI events, in time order within each sheet's block.
@@ -627,6 +648,7 @@ static uint8_t playhead_sound(uint32_t from, uint32_t to, uint8_t mode) {
  * (and slides off the left edge via glyph clipping) instead of staying put. */
 static void render_window(uint32_t sc) {
     uint32_t i;
+    if (screen_blank) return;
     ui_clear();
     ui_plane_black();
     ui_staff_cols(0u, 240u);
@@ -729,6 +751,7 @@ static void book_title(char *dst) {
 
 static void render_book(void) {
     char title[44];
+    if (screen_blank) return;
     book_title(title);
     ui_paper();
     render_window(0u);
@@ -738,6 +761,33 @@ static void render_book(void) {
     show_tempo();
     shown_oct = 99;
     show_oct();
+}
+
+/* repaint the whole current screen: the paper, the window, and every
+ * overlay (title, tempo, octave, hint). The wake from an idle blank
+ * needs it -- the blank erased the whole panel, and the overlays
+ * otherwise only redraw when they change. In the book, render_book
+ * already repaints everything. */
+static void redraw_now(void) {
+    char title[44];
+    if (in_book) { render_book(); return; }
+    ui_paper();
+    render_window(scroll_now());
+    book_title(title);
+    ui_title(title);
+    shown_oct = 99; show_oct();   /* force the overlays back on */
+    shown_bpm = 0; show_tempo();
+    if (preset_notice_until && fm1_ms < preset_notice_until) show_preset();
+    else show_hint();
+}
+
+/* blank the screen: fill it black. A fill, not the panel's
+ * display-off command -- the host harness emulates the fill, so the
+ * blank is verifiable on host. On hardware the backlight stays on;
+ * only the pixels go black. */
+static void blank_screen(void) {
+    screen_blank = 1;
+    lcd_fill(0, 0, 240, 240, 0);
 }
 
 /* The clef follows the octave: shift down and the staff becomes a bass
@@ -1129,13 +1179,16 @@ static void app_main(void) {
 
     leds_update();  /* the panel lights follow the state */
     render_book();
+    last_input_ms = fm1_ms;   /* the idle timer runs from power-on */
 
     for (;;) {
         uint32_t keys, b;
         int32_t e;
+        uint8_t had_input = 0;   /* any input this pass (idle timer) */
         platform_poll();
 
         e = fm1_enc_take(ENC_SELECT);
+        if (e) had_input = 1;
         if (e) {
             /* SELECT switches sheets from anywhere -- in the book or
              * on the tape -- and never erases: the take, the playhead
@@ -1163,6 +1216,7 @@ static void app_main(void) {
             }
         }
         e = fm1_enc_take(ENC_KNOB1);
+        if (e) had_input = 1;
         if (e) {
             /* tempo: record slow, crank it up for playback. While the
              * sheet is moving the velocity follows the tempo at once. */
@@ -1177,6 +1231,7 @@ static void app_main(void) {
             }
         }
         e = fm1_enc_take(ENC_KNOB4);
+        if (e) had_input = 1;
         if (e) {
             /* KNOB4 scrolls coarsely, one beat per click, snapping
              * the playhead to a beat boundary. In the book it enters
@@ -1189,6 +1244,7 @@ static void app_main(void) {
             knob_coarse_scroll(e);
         }
         e = fm1_enc_take(ENC_KNOB3);
+        if (e) had_input = 1;
         if (e) {
             /* KNOB3 moves the sheet finely (scrub the tape), 4px per
              * click, from the moment the device starts: in the book
@@ -1201,6 +1257,7 @@ static void app_main(void) {
             scrub_to((uint32_t)s);
         }
         e = fm1_enc_take(ENC_PRESETS);
+        if (e) had_input = 1;
         if (e) {
             /* the PRESETS knob selects the FM piano patch. It wraps:
              * past the last patch it comes back to the first. The
@@ -1215,6 +1272,7 @@ static void app_main(void) {
         /* KNOB2 does nothing yet. */
 
         { uint32_t rel_; b = fm1_input_edges(&rel_); }
+        if (b) had_input = 1;
         if (b & (1u << BTN_PLAY)) {
             /* PLAY toggles the velocity: stopped -> move at the tempo
              * rate, moving -> stop. It never touches recording. In
@@ -1298,6 +1356,7 @@ static void app_main(void) {
 
         keys = fm1_in.notes;
         keys_down = keys;
+        if (keys) had_input = 1;   /* a held key is not idle */
         {
             /* one previous-keys state drives both edges: a press is
              * a bit set now and clear before, a release the reverse.
@@ -1305,6 +1364,7 @@ static void app_main(void) {
             uint32_t ed = keys & ~prev_keys;
             uint32_t off = prev_keys & ~keys;
             prev_keys = keys;
+            if (ed || off) had_input = 1;
             for (k = 0; k < 27u; k++)
                 if (ed >> k & 1u) {
                     uint8_t midi = key_midi(k);
@@ -1339,6 +1399,21 @@ static void app_main(void) {
 
         if (set_dirty && fm1_ms - last_save_ms > SAVE_THROTTLE_MS) {
             save_if_dirty(); last_save_ms = fm1_ms;
+        }
+
+        /* idle: any input resets the timer, and wakes a blanked
+         * screen (repainted in full -- the input itself has already
+         * acted normally above, so its own drawing was suppressed
+         * and the repaint covers it). No input for IDLE_BLACK_MS
+         * blanks the screen; the tape and the audio keep going. */
+        if (had_input) {
+            last_input_ms = fm1_ms;
+            if (screen_blank) {
+                screen_blank = 0;
+                redraw_now();
+            }
+        } else if (!screen_blank && fm1_ms - last_input_ms >= IDLE_BLACK_MS) {
+            blank_screen();
         }
     }
 }
