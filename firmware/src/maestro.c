@@ -65,6 +65,7 @@
  * sit at a dim backlight so they are visible in the dark. If REC
  * is on and you play a note while stopped, PLAY auto-starts
  * (the velocity becomes the tempo rate) -- the user can veto this.
+ * (Free Play; in a book piece the v0.24 kick-off below replaces it.)
  *
  * KNOB1 is tempo (40-200 BPM, 2 per click): record slow, crank it up
  * for playback. While the sheet is moving the velocity follows the
@@ -119,6 +120,30 @@
  * (tools/lessons2c.py), never in the take. The take serializes
  * straight to a .mid file (midi_write) and parses straight back
  * (midi_parse): no re-encoding, no lossy translation layer.
+ *
+ * v0.24: a practice loop, added on top of the tape recorder (the
+ * transport, the knobs, jumps and the delete head all keep working
+ * as before). A book piece parks at its first note: entering it,
+ * switching to it, or loading it after a take puts the playhead on
+ * the first blue note instead of at position 0 (Free Play still
+ * restores its saved offset). Parked and stopped, playing that
+ * first note (or every pitch of its chord) is an alternative way
+ * to kick off REC: the write bit turns on, the tape starts
+ * rolling, and the chord is recorded. In a book piece that
+ * replaces auto-start: a wrong first note starts nothing, and a
+ * stopped press records nothing (while rolling, REC records as
+ * always). When a rolling book take reaches the end of the piece,
+ * another piece loads, parked: the same piece again after a
+ * terrible take, otherwise the next piece in the book (wrapping
+ * to the first; the drill is re-seeded when the sequence loads
+ * it). PLAY-only play-along still just stops at the end.
+ * "Terrible" is invisible -- nothing is scored on screen. During
+ * a rolling take, presses are matched against the blue notes (a
+ * press whose pitch is right and whose playhead is within
+ * MATCH_W_PX of the note's x matches it); a take is terrible when
+ * fewer than half the notes matched, or when wrong presses
+ * outnumber the notes. All of it is session state: nothing
+ * persists.
  */
 
 #include "fm_piano.c"   /* DX7 FM piano presets (E.PIANO 4 default) -- v0.19 */
@@ -131,6 +156,20 @@
 static const lesson_t *pieces[NPIECES];  /* 0..4 lessons, 5 = generated drill */
 static lesson_t drill_lesson;
 static const char *free_title = "Free Play";
+
+/* the generated drill (pieces[5]) is regenerated from drill_seed:
+ * the boot drill uses seed 7, and the end-of-take sequence gives
+ * the drill a fresh seed each time it loads it, so a wrapped
+ * sequence never repeats the same drill. */
+static uint32_t drill_seed = 7u;
+static void regen_drill(void) {
+    drill_params_t dp;
+    dp.position_midi = 60; dp.range = 7; dp.tempo = 96;
+    dp.bars = 4; dp.beats_per_bar = 4;
+    dp.rhythm_mask = RHY_Q | RHY_H | RHY_E;
+    dp.allow_rests = 1; dp.seed = drill_seed;
+    drill_lesson.event_count = drill_generate(&dp, drill_lesson.events, LESSON_MAX_EVENTS);
+}
 
 #define PXQ 32u      /* px per quarter note */
 #define CURSOR_X 60u   /* the playhead is fixed; the sheet scrolls under it */
@@ -823,6 +862,77 @@ static void select_piece(void) {
     tempo = is_free ? FREE_TEMPO : pl->tempo;
 }
 
+/* ---- the practice loop (v0.24) ----
+ * start_x is where a sheet's tape rests: Free Play at the cursor,
+ * a book piece parked on its first blue note. Entering a book
+ * piece, switching to it, or loading it after a take all park
+ * there; Free Play restores its saved offset instead. */
+static uint32_t start_x(void) {
+    uint16_t i;
+    if (is_free) return CURSOR_X;
+    for (i = 0; i < evn; i++)
+        if (!pl->events[i].is_rest) return evx[i];
+    return CURSOR_X;   /* a piece with no notes parks at the start */
+}
+
+/* the take's invisible score: how the rolling take is doing,
+ * counted only to pick same-piece vs next-piece at the end. A
+ * press matches a blue note when its pitch is right and the
+ * playhead is within MATCH_W_PX of the note's x (half a quarter
+ * note of score space: forgiving, not free). Wrong presses while
+ * rolling a take count against it too. Nothing is displayed. */
+#define MATCH_W_PX 16u   /* a press this close (px) to a blue note can match it */
+#define TERRIBLE_MULT 2u /* terrible: matched * TERRIBLE_MULT < total */
+static uint8_t ev_hit[MAXEV];   /* blue notes matched in the current take */
+static uint32_t take_matched, take_wrong, take_total;
+/* the first note's chord, for the REC kick-off: the pitches that
+ * must be pressed at the park to start a take without REC/PLAY. */
+static uint8_t kick_need[8];
+static uint8_t kick_need_n;
+static uint8_t kick_got_mask;   /* which kick_need pitches are already pressed */
+
+/* a book piece becomes current: fresh counters, and the first
+ * note's chord (every non-rest note at the first note's x). */
+static void reset_take_stats(void) {
+    uint16_t i;
+    uint32_t x0 = 0;
+    take_matched = 0; take_wrong = 0; take_total = 0;
+    for (i = 0; i < MAXEV; i++) ev_hit[i] = 0;
+    kick_need_n = 0; kick_got_mask = 0;
+    if (is_free || !pl) return;
+    for (i = 0; i < evn; i++) {
+        if (pl->events[i].is_rest) continue;
+        take_total++;
+        if (!kick_need_n) x0 = evx[i];
+        else if (evx[i] != x0) continue;   /* the chord is only at the first x */
+        if (kick_need_n < 8u) kick_need[kick_need_n++] = pl->events[i].midi;
+    }
+}
+
+/* judge one press during a rolling book take: the nearest
+ * unmatched blue note of this pitch within the match window is a
+ * match; anything else is a wrong press. */
+static void judge_press(uint8_t midi) {
+    uint16_t i;
+    int32_t best = -1;
+    uint32_t bestd = MATCH_W_PX + 1u;
+    for (i = 0; i < evn; i++) {
+        uint32_t d;
+        if (pl->events[i].is_rest || ev_hit[i] || pl->events[i].midi != midi) continue;
+        d = evx[i] > timestamp ? evx[i] - timestamp : timestamp - evx[i];
+        if (d < bestd) { bestd = d; best = (int32_t)i; }
+    }
+    if (best >= 0) { ev_hit[best] = 1; take_matched++; }
+    else take_wrong++;
+}
+
+/* terrible: fewer than half the piece's blue notes matched, or
+ * more wrong presses than the piece has notes. */
+static uint8_t take_terrible(void) {
+    if (!take_total) return 0;
+    return take_matched * TERRIBLE_MULT < take_total || take_wrong > take_total;
+}
+
 /* ---- transport ---- */
 static void silence_playback(void) {
     uint8_t i;
@@ -878,6 +988,7 @@ static void set_velocity(uint32_t v) {
          * notes still sounding are silenced (a fresh start). */
         pb_idx = mev_find_abs(rec, sheet_notes_begin(sel), sheet_notes_end(sel), px_to_ticks(timestamp), 1);
         n_sounding = 0;
+        kick_got_mask = 0;   /* a half-pressed kick-off chord is forgotten */
         last_frame_ms = fm1_ms;
     } else if (!v && velocity) {
         silence_playback();
@@ -918,6 +1029,36 @@ static uint32_t last_take_px(uint8_t s) {
     while (i > b && !mev_is_note_on(&rec[i - 1u])) i--;
     if (i == b) return 0;
     return ticks_to_px(mev_abs(rec, b, (uint16_t)(i - 1u)));
+}
+
+/* a book take reached the end of the piece: load another piece,
+ * parked at its first note, tape stopped, ready for the next take.
+ * A terrible take repeats the same piece; a decent one advances
+ * through the book (wrapping to the first piece, never to Free
+ * Play; the drill is re-seeded when the sequence loads it). The
+ * write bit is left as it is -- the kick-off works either way. */
+static void end_of_take(void) {
+    uint8_t next = sel;
+    set_velocity(0);
+    if (!take_terrible()) {
+        do { next = (uint8_t)(next + 1u); if (next >= NPIECES) next = 0; } while (!pieces[next]);
+    }
+    if (next != sel) {
+        sheet_tempo[sel] = tempo;   /* the old sheet keeps its tempo */
+        if (next == (uint8_t)(NPIECES - 1u)) { drill_seed++; regen_drill(); }
+        sel = next;
+        set.sel = sel;   /* the selection persists, as with SELECT */
+        set_dirty = 1;
+        setup_piece();
+        tempo = pl->tempo;   /* a fresh piece starts at its own tempo */
+        sheet_tempo[sel] = tempo;
+    }
+    timestamp = start_x(); timestamp_frac = 0;
+    sheet_ts[sel] = timestamp;
+    pb_idx = sheet_notes_begin(sel);
+    reset_take_stats();
+    render_window(scroll_now());
+    show_hint();
 }
 
 /* one tick while the sheet moves: timestamp += velocity, then the
@@ -969,8 +1110,14 @@ static void tick(void) {
         if (!is_free && evn) { end = piece_end_x; has_end = 1; }
         else if (is_free && free_end_set) { end = free_end_x; has_end = 1; }
         if (has_end && px > end && !n_sounding) {
-            set_velocity(0);
-            render_window(scroll_now());
+            /* a book TAKE reaching the end loads another piece,
+             * parked (v0.24); play-along (no REC) and free play
+             * just stop, as before. */
+            if (!is_free && recording()) end_of_take();
+            else {
+                set_velocity(0);
+                render_window(scroll_now());
+            }
             return;
         }
         if (!has_end && is_free && !keys_down &&
@@ -1052,14 +1199,16 @@ static void knob_coarse_scroll(int32_t dir) {
     scrub_to((uint32_t)target_px);
 }
 
-/* enter the piece stopped (from the book), so a knob can scrub it. */
+/* enter the piece stopped (from the book), so a knob can scrub it.
+ * A book piece is entered parked at its first note. */
 static void enter_piece_stopped(void) {
     setup_piece();
-    timestamp = CURSOR_X; timestamp_frac = 0;
-    sheet_ts[sel] = CURSOR_X;   /* entering a piece starts at the beginning */
+    timestamp = start_x(); timestamp_frac = 0;
+    sheet_ts[sel] = timestamp;   /* entering a piece starts at its rest position */
     velocity = 0;
     in_book = 0;
-    render_window(0u);
+    if (!is_free) reset_take_stats();
+    render_window(scroll_now());
     show_hint();
 }
 
@@ -1083,6 +1232,45 @@ static void seq_jump(void) {
     render_window(scroll_now());
 }
 
+/* the REC kick-off: a book piece parked at its first note, tape
+ * stopped -- pressing the first note (or every pitch of its chord,
+ * in any order) starts a take: the write bit turns on, the tape
+ * rolls, and the chord is recorded and counts as matched. Returns
+ * 1 when this press completed the chord and kicked the take off;
+ * the caller then sounds the press as a normal key press. */
+static uint8_t kickoff_press(uint8_t midi) {
+    uint8_t i, n;
+    uint8_t pitches[8];
+    for (i = 0; i < kick_need_n; i++)
+        if (kick_need[i] == midi && !(kick_got_mask & (uint8_t)(1u << i))) {
+            kick_got_mask |= (uint8_t)(1u << i);
+            break;
+        }
+    if (i == kick_need_n) return 0;   /* not a new pitch of the chord */
+    if (kick_got_mask != (uint8_t)((1u << kick_need_n) - 1u)) return 0;   /* chord incomplete */
+    n = kick_need_n;
+    for (i = 0; i < n; i++) pitches[i] = kick_need[i];
+    kick_got_mask = 0;
+    set_rec_write(1);
+    set_velocity((uint32_t)tempo * PXQ);
+    /* like the auto-start path: sound any take notes at the
+     * playhead first, then write -- the recompute in rec_note_on
+     * moves pb_idx past the playhead. */
+    playhead_sound(timestamp, timestamp, MODE_PLAY);
+    for (i = 0; i < n; i++) rec_note_on(pitches[i]);
+    /* the first-note chord counts as matched: mark its events. */
+    {
+        uint16_t j;
+        uint32_t x0 = start_x();
+        for (j = 0; j < evn; j++) {
+            if (pl->events[j].is_rest || evx[j] != x0 || ev_hit[j]) continue;
+            ev_hit[j] = 1;
+            take_matched++;
+        }
+    }
+    return 1;
+}
+
 /* A key press places a note at the playhead's timestamp (a ghost
  * note). The playhead sounds it, once. If REC is on, the note is
  * written to the take (recorded); if REC is off, it is a ghost
@@ -1093,10 +1281,31 @@ static void seq_jump(void) {
  * reached yet are sounded (so the recompute in rec_note_on, which
  * moves pb_idx past the playhead, does not skip them). */
 static void on_key(uint8_t midi, uint32_t k) {
+    /* the kick-off: a book piece parked at its first note, tape
+     * stopped, and this press completed the first-note chord. */
+    if (!is_free && !in_book && !moving() && kick_need_n && timestamp == start_x() &&
+        kickoff_press(midi)) {
+        ghost[k].midi = midi;
+        ghost[k].x = (uint16_t)timestamp;
+        ghost[k].active = 1;
+        ghost[k].sounded = 0;
+        playhead_sound(timestamp, timestamp, MODE_LIVE);
+        render_window(scroll_now());
+        return;
+    }
     if (recording()) {
-        if (!moving()) toggle_play();   /* auto-start */
-        playhead_sound(timestamp, timestamp, MODE_PLAY);
-        rec_note_on(midi);
+        if (!moving() && !is_free) {
+            /* a book piece, stopped, and no kick-off: the press is
+             * a ghost only. In a book piece auto-start belongs to
+             * the kick-off, so a stopped press never starts the
+             * tape and never records -- not even at the park with
+             * REC already armed. */
+        } else {
+            if (!moving()) toggle_play();   /* auto-start */
+            playhead_sound(timestamp, timestamp, MODE_PLAY);
+            rec_note_on(midi);
+            if (!is_free && moving()) judge_press(midi);
+        }
     }
     ghost[k].midi = midi;
     ghost[k].x = (uint16_t)timestamp;
@@ -1107,7 +1316,11 @@ static void on_key(uint8_t midi, uint32_t k) {
 }
 static void on_key_up(uint8_t midi, uint32_t k) {
     uint8_t had_ghost = ghost[k].active;
-    if (recording()) rec_note_off(midi);
+    /* in a book piece, a stopped release closes nothing: stopped
+     * presses recorded nothing, and a note the kick-off left open
+     * keeps its default length. (Free play, and any release while
+     * the tape rolls, close the note as always.) */
+    if (recording() && (is_free || moving())) rec_note_off(midi);
     ghost[k].active = 0;
     ghost[k].sounded = 0;
     if (had_ghost) render_window(scroll_now());
@@ -1131,7 +1344,12 @@ static void restore_sheet_state(void) {
     free_end_set = sheet_end_set[sel];
     free_end_x = sheet_end_x[sel];
     if (!in_book) {
-        timestamp = sheet_ts[sel];
+        /* a book piece is restored parked at its first note, not
+         * at its saved offset (v0.24); free play restores its
+         * offset as always. A restored book piece starts a fresh
+         * take count. */
+        timestamp = is_free ? sheet_ts[sel] : start_x();
+        if (!is_free) reset_take_stats();
         timestamp_frac = 0;
         if (moving()) velocity = tempo * PXQ;
         silence_playback();
@@ -1151,16 +1369,11 @@ static void app_main(void) {
     uint32_t i;
     for (i = 0; i < 5u && i < (uint32_t)all_lessons_count; i++) pieces[i] = all_lessons[i];
     {
-        drill_params_t dp;
-        dp.position_midi = 60; dp.range = 7; dp.tempo = 96;
-        dp.bars = 4; dp.beats_per_bar = 4;
-        dp.rhythm_mask = RHY_Q | RHY_H | RHY_E;
-        dp.allow_rests = 1; dp.seed = 7;
         { const char *t = "Drill";
           for (i = 0; t[i]; i++) drill_lesson.title[i] = t[i];
           drill_lesson.title[i] = 0; }
         drill_lesson.level = 2; drill_lesson.tempo = 96;
-        drill_lesson.event_count = drill_generate(&dp, drill_lesson.events, LESSON_MAX_EVENTS);
+        regen_drill();
         pieces[5] = &drill_lesson;
     }
     rec_init();   /* one unified list: NBOOK empty End-of-Track blocks */
@@ -1279,10 +1492,11 @@ static void app_main(void) {
              * the book it enters the piece, then starts it. */
             if (in_book) {
                 setup_piece();
-                timestamp = CURSOR_X; timestamp_frac = 0;
-                sheet_ts[sel] = CURSOR_X;   /* entering a piece starts at the beginning */
+                timestamp = start_x(); timestamp_frac = 0;
+                sheet_ts[sel] = timestamp;   /* a book piece enters parked at its first note */
                 in_book = 0;
-                render_window(0u);
+                if (!is_free) reset_take_stats();
+                render_window(scroll_now());
             }
             toggle_play();
         }
@@ -1292,10 +1506,11 @@ static void app_main(void) {
              * it enters the piece, then arms. */
             if (in_book) {
                 setup_piece();
-                timestamp = CURSOR_X; timestamp_frac = 0;
-                sheet_ts[sel] = CURSOR_X;   /* entering a piece starts at the beginning */
+                timestamp = start_x(); timestamp_frac = 0;
+                sheet_ts[sel] = timestamp;   /* a book piece enters parked at its first note */
                 in_book = 0;
-                render_window(0u);
+                if (!is_free) reset_take_stats();
+                render_window(scroll_now());
             }
             toggle_rec();
         }
@@ -1339,10 +1554,10 @@ static void app_main(void) {
                 render_book();
             } else if (!in_book && !moving() && !recording()) {
                 save_if_dirty();
-                if (timestamp > CURSOR_X) {
-                    timestamp = CURSOR_X; timestamp_frac = 0;
-                    sheet_ts[sel] = CURSOR_X;   /* HOME rewinds the sheet */
-                    render_window(0u);
+                if (timestamp > start_x()) {
+                    timestamp = start_x(); timestamp_frac = 0;
+                    sheet_ts[sel] = timestamp;   /* HOME rewinds the sheet (to the park, in a book piece) */
+                    render_window(scroll_now());
                 } else {
                     setup_piece();
                     timestamp = CURSOR_X; timestamp_frac = 0;
