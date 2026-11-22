@@ -81,15 +81,19 @@
  * bass staff (F clef -- the notes you play are in the bass range);
  * shift back up and it returns to treble.
  *
- * The panel lights mean one thing each (v0.26): PLAY is lit while
- * the tape is stopped at a park where a note press starts a take
- * ("press me"), flashes on the beat while the sheet moves, and is
- * dark in the book or stopped mid-sheet; REC is solid while a take
- * is rolling and pulses slowly while merely armed; SEQ bright
- * while the take contains a jump, EDIT bright while the delete
- * head is on, SAVE bright once a free-play end is marked, HOME bright
- * always; the rest sit at a dim glow. The 27 key LEDs sit at a dim
- * glow (the backlight).
+ * The panel lights mean one thing each (v0.27): PLAY is a colour,
+ * not a pattern -- green while the tape is stopped, red while it
+ * moves (velocity > 0), steady in both, in the book too (stopped
+ * is stopped). REC is solid while a take is rolling and pulses
+ * slowly while merely armed; SEQ bright while the take contains a
+ * jump, EDIT bright while the delete head is on, SAVE bright once
+ * a free-play end is marked, HOME bright always; the rest sit at
+ * a dim glow. The key LEDs point at the note to be played: the
+ * next guide note group's keys (the kick-off group at the park)
+ * are bright and every other key sits at the dim glow, so the
+ * keyboard itself answers "what now". During the end-of-take
+ * replay the keys light the take's next note group instead.
+ * Free Play has no guide and no target: all keys glow.
  *
  * Idle: after IDLE_BLACK_MS (2 minutes) with no key, button or
  * encoder input, the screen fills black and nothing draws. Any
@@ -1096,6 +1100,20 @@ static uint32_t start_x(void) {
  * rolling a take count against it too. Nothing is displayed. */
 #define MATCH_W_PX 16u   /* a press this close (px) to a blue note can match it */
 #define TERRIBLE_MULT 2u /* terrible: matched * TERRIBLE_MULT < total */
+
+/* the kick-off's park: the playhead stopped where a first-note
+ * press can only mean "start the take" -- anywhere in the lead-in
+ * before the first note (no music exists there yet), and up to
+ * half a beat past it: a PLAY tap stopped a hair late, a scrub
+ * detent, a bumped knob. The designed entries (boot, SELECT,
+ * HOME, cue) all land on start_x() exactly, but a human reaches
+ * the park approximately; an exact-equality test made every
+ * near-park press a silent ghost -- it sounded, and started
+ * nothing. kickoff_press snaps to the exact park before it
+ * records, so a forgiven press still writes an aligned take. */
+static uint8_t at_kick_park(void) {
+    return timestamp <= start_x() + MATCH_W_PX;
+}
 static uint8_t ev_hit[MAXEV];   /* blue notes matched in the current take */
 static uint32_t take_matched, take_wrong, take_total;
 /* the first note's chord, for the REC kick-off: the pitches that
@@ -1153,16 +1171,17 @@ static void silence_playback(void) {
     n_sounding = 0;
 }
 
-/* the panel lights, one meaning each (v0.26): PLAY lit while the
- * tape is stopped at a park where a note press starts a take (the
- * "press me" state), flashing on the beat while the sheet moves,
- * dark in the book or stopped mid-sheet; REC solid while a take
+static uint32_t target_keys(void);   /* below, with the replay state it reads */
+
+/* the panel lights, one meaning each (v0.27): PLAY is green while
+ * the tape is stopped and red while it moves (velocity > 0) --
+ * steady, never a pattern, in the book too; REC solid while a take
  * is rolling, pulsing slowly while merely armed, dark while off;
  * SEQ bright while the take contains a jump, EDIT bright while
  * the delete head is on, SAVE bright once a free-play end is
- * marked, HOME bright always; the rest sit at a dim glow. The 27
- * key LEDs sit at a dim glow -- the backlight, so the keys are
- * visible in the dark. */
+ * marked, HOME bright always; the rest sit at a dim glow. The key
+ * LEDs light the note to be played (target_keys) bright over the
+ * dim glow every other key sits at. */
 static void leds_update(void) {
 #if BOARD_SMK37
     uint32_t nbtn = 18u;
@@ -1173,24 +1192,8 @@ static void leds_update(void) {
     uint8_t jump = has_jump();   /* once: the take doesn't change mid-loop */
     for (b = 0; b < nbtn; b++) {
         uint8_t bright = 0;
+        if (b == (uint32_t)BTN_PLAY) continue;   /* its two colours, below */
         if (b == (uint32_t)BTN_HOME) bright = 1;
-        else if (b == (uint32_t)BTN_PLAY) {
-            if (in_book) bright = 0;
-            else if (moving()) {
-                /* rolling: flash on the beat -- lit for the first
-                 * half of each beat, dark for the second, so the
-                 * button pulses at the tempo the sheet moves at.
-                 * Beats sit at CLEF_W + n*PXQ (knob_coarse_scroll). */
-                int32_t ph = ((int32_t)timestamp - (int32_t)CLEF_W) % (int32_t)PXQ;
-                if (ph < 0) ph += (int32_t)PXQ;
-                bright = ph < (int32_t)(PXQ / 2u);
-            } else {
-                /* stopped on the tape: lit at the park, where a
-                 * note press kicks a take off (Free Play's park
-                 * is its rest position, the cursor). */
-                bright = (timestamp == start_x() && (is_free || kick_need_n));
-            }
-        }
         else if (b == (uint32_t)BTN_REC) {
             if (recording() && moving()) bright = 1;              /* a take is rolling */
             else if (recording()) bright = (uint8_t)((fm1_ms / 400u) & 1u);   /* armed: a slow pulse */
@@ -1204,11 +1207,19 @@ static void leds_update(void) {
         if (bright) { fm1_led_key(b, 1); fm1_led_key_glow(b, 0); }
         else { fm1_led_key(b, 0); fm1_led_key_glow(b, 1); }
     }
+    /* PLAY: green stopped, red moving -- the transport state as
+     * two points of the play driver's space: full brightness,
+     * balance hard green or hard red (fm1_led_play_set). */
+    fm1_led_play_set(255u, moving() ? 255u : 0u);
 #if !BOARD_SMK37
-    /* the key backlight (FM-1 only: the SMK-37 keys have no LEDs). */
-    for (b = 0; b < 27u; b++) {
-        fm1_led_key(KEY_LED(b), 0);
-        fm1_led_key_glow(KEY_LED(b), 1);
+    /* the note to be played, bright over the backlight glow
+     * (FM-1 only: the SMK-37 keys have no LEDs). */
+    {
+        uint32_t target = target_keys();
+        for (b = 0; b < 27u; b++) {
+            if ((target >> b) & 1u) { fm1_led_key(KEY_LED(b), 1); fm1_led_key_glow(KEY_LED(b), 0); }
+            else { fm1_led_key(KEY_LED(b), 0); fm1_led_key_glow(KEY_LED(b), 1); }
+        }
     }
 #endif
 }
@@ -1288,6 +1299,67 @@ static uint8_t replay_terrible;   /* the verdict the replay ends into */
 
 static uint8_t replay_missed_note(uint16_t ev) {
     return replaying && !assembly && ev < MAXEV && !ev_hit[ev];
+}
+
+/* ---- the note to be played (v0.27): the keys the panel lights
+ * bright. A pitch lights the key that sounds it under the current
+ * octave shift; a pitch no key currently sounds lights nothing. */
+static uint32_t target_key_bit(uint8_t midi) {
+    int32_t k = (int32_t)midi - 53 - (int32_t)oct_shift * 12;
+    return k >= 0 && k < 27 ? 1u << (uint32_t)k : 0u;
+}
+
+/* the guide's next note group: the first group (the non-rest
+ * events at one x) not yet fully matched and not more than the
+ * match window behind the playhead. At the park that is the
+ * kick-off group; rolling, it is the group to play next, and it
+ * advances as each group is matched or passes out of reach. */
+static uint32_t target_guide_keys(void) {
+    uint16_t i;
+    for (i = 0; i < evn; i++) {
+        uint32_t x, mask = 0;
+        uint16_t j;
+        uint8_t all_hit = 1;
+        if (pl->events[i].is_rest) continue;
+        x = evx[i];
+        for (j = i; j < evn && evx[j] == x; j++) {
+            if (pl->events[j].is_rest || ev_hit[j]) continue;
+            all_hit = 0;
+            mask |= target_key_bit(pl->events[j].midi);
+        }
+        if (!all_hit && (int32_t)x + (int32_t)MATCH_W_PX >= (int32_t)timestamp)
+            return mask;
+        while (i + 1u < evn && evx[i + 1u] == x) i++;   /* skip the rest of this group */
+    }
+    return 0;
+}
+
+/* the replay's target: the take's next Note On group (any channel:
+ * on the song the parts sound together), by the same window rule. */
+static uint32_t target_take_keys(void) {
+    uint16_t i, b = sheet_notes_begin(sel), e = sheet_notes_end(sel);
+    uint32_t now = px_to_ticks(timestamp), gt = 0xFFFFFFFFu, mask = 0;
+    for (i = b; i < e; i++) {
+        uint32_t at;
+        if (!mev_is_note_on(&rec[i])) continue;
+        at = mev_abs(rec, b, i);
+        if (at + MATCH_W_PX * 96u / PXQ >= now) { gt = at; break; }
+    }
+    if (gt == 0xFFFFFFFFu) return 0;
+    for (i = b; i < e; i++)
+        if (mev_is_note_on(&rec[i]) && mev_abs(rec, b, i) == gt)
+            mask |= target_key_bit(rec[i].d1);
+    return mask;
+}
+
+/* the keys to light bright, or 0 for none: the book and Free Play
+ * have no "next note"; a replay lights the take, anything else on
+ * a guided sheet lights the guide. */
+static uint32_t target_keys(void) {
+    if (in_book || is_free) return 0;
+    if (replaying) return target_take_keys();
+    if (!pl || !evn) return 0;
+    return target_guide_keys();
 }
 
 /* load the piece a finished take hands over to, parked at its
@@ -1623,6 +1695,9 @@ static uint8_t kickoff_press(uint8_t midi) {
         }
     if (i == kick_need_n) return 0;   /* not a new pitch of the chord */
     if (kick_got_mask != (uint8_t)((1u << kick_need_n) - 1u)) return 0;   /* chord incomplete */
+    /* the take starts at the park itself, not at the near-park
+     * spot the playhead happened to stop at (at_kick_park). */
+    timestamp = start_x(); timestamp_frac = 0;
     if (is_song && song_done[song_part]) {
         /* re-learning a finished part: its old take goes first --
          * a fresh take, like the terrible retry -- so the new
@@ -1666,7 +1741,7 @@ static uint8_t kickoff_press(uint8_t midi) {
 static void on_key(uint8_t midi, uint32_t k) {
     /* the kick-off: a book piece parked at its first note, tape
      * stopped, and this press completed the first-note chord. */
-    if (!is_free && !in_book && !moving() && kick_need_n && timestamp == start_x() &&
+    if (!is_free && !in_book && !moving() && kick_need_n && at_kick_park() &&
         kickoff_press(midi)) {
         ghost[k].midi = midi;
         ghost[k].x = (uint16_t)timestamp;
