@@ -1,0 +1,15 @@
+# v024 knobs while moving: KNOB4 updates the timestamp while the sheet
+# is moving (the playhead jumps to the new timestamp and keeps advancing
+# from there at the same velocity). Free play, 72 BPM (38.4 px/s).
+# PLAY at 300 starts the tape; KNOB4 +1 at 2000 snaps the playhead to
+# the next beat (+19 px here); the tape must keep moving after the jump.
+# The control (v024_knob_moving_ctrl) is the same run without the knob:
+# the 2500 ms scroll must differ (the knob moved the playhead), and the
+# scroll must keep advancing 2500 -> 3500 (velocity unchanged).
+100 enc 0 6
+300 btn 12
+1500 shot
+2000 enc 5 1
+2500 shot
+3500 shot
+4500 end

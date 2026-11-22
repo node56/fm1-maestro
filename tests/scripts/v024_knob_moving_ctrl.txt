@@ -1,0 +1,9 @@
+# v024 knobs while moving, control: same run as v024_knob_moving but
+# without the KNOB4 turn. The 2500 ms scroll must match the plain
+# time-based advance (no jump).
+100 enc 0 6
+300 btn 12
+1500 shot
+2500 shot
+3500 shot
+4500 end

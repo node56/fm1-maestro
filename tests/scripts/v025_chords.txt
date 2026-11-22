@@ -1,0 +1,15 @@
+# v025 chords: three notes at the same delta time sound together, once each
+# Free play, 72 BPM. REC a C5+E5+G5 chord (keys 7, 9, 11 at once),
+# rewind, PLAY: the chord must play back with all three pitches.
+# The live window (500-1000 ms) must match the PLAY-only control
+# (v025_chords_ctrl): the recorded chord sounds once, via the ghost,
+# not twice. Key 7 = C5 (523 Hz), key 9 = D5 (587 Hz), key 11 = E5 (659 Hz).
+T
+100 enc 0 6
+300 btn 13
+500 keys 0xA80
+1000 keys 0
+1200 btn 12
+1400 btn 8
+1600 btn 12
+4000 end

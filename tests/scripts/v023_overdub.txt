@@ -1,0 +1,22 @@
+# v023 overdub: a note recorded in pass 1 must sound when the playhead
+# crosses it in REC during pass 2 (overdub monitoring), and a note
+# recorded in pass 2 must sound once.
+# Free play, 72 BPM. Key 7 = C5 (523 Hz), key 9 = D5 (587 Hz).
+# Pass 1: record C5 at x=60 (playhead at scroll 0).
+100 enc 0 6
+300 btn 13
+500 keys 0x80
+1000 keys 0
+1200 btn 12
+1400 btn 12
+# Rewind, then pass 2: PLAY + REC (punch in) from the start.
+1600 btn 8
+1800 btn 12
+2000 btn 13
+# The C5 (x=60) is at the playhead at once: it must sound in REC
+# (overdub), with no key pressed. Then record D5 at ~2600 ms.
+2600 keys 0x200
+3100 keys 0
+4000 btn 12
+4200 btn 12
+4400 end

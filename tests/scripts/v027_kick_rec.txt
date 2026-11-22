@@ -1,0 +1,11 @@
+# v027 kick-off recording proof (A/B pair with v027_kick_rec_ctrl):
+# kick off with C5, then SELECT away and back while the tape rolls
+# (SELECT never stops the transport). The switch back parks at the
+# first note with the take intact, and the still-rolling tape sounds
+# the recorded C5 as it leaves the park (~3.0 s). WAV only.
+100 btn 13
+1000 keys 0x80
+1600 keys 0
+2600 enc 0 1
+3000 enc 0 -1
+4600 end

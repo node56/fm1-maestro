@@ -1,0 +1,18 @@
+# v022 SAVE: record a note in free play, SAVE to mark the end, rewind,
+# PLAY from the start -- the tape must stop at the marked end.
+# Free play, 72 BPM (38.4 px/s). SAVE at ~3 s marks the end at about
+# scroll 96; after rewinding, PLAY stops there (~7.5 s). Film mode logs
+# the PLAY LED; the two shots after the stop must show the same scroll.
+# (v0.21: REC punches out of recording, not PLAY -- PLAY toggles the
+# velocity, so PLAY here would stop the tape instead.)
+100 enc 0 6
+300 btn 13
+500 keys 0x80
+700 keys 0
+900 btn 13
+3000 btn 9
+4000 btn 8
+5000 btn 12
+8000 shot
+12000 shot
+14000 end

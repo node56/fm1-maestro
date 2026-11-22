@@ -1,0 +1,11 @@
+# v027 wrong first note: parked at piece 0's first note (C5), REC armed.
+# A wrong note (key 0 = F3) sounds, but starts nothing and records
+# nothing: the tape stays stopped, the view at 3000 ms equals the
+# parked view at 400 ms. Film log: PLAY = bit 12, REC = bit 13.
+T
+100 btn 13
+400 shot
+1000 keys 0x1
+1600 keys 0
+3000 shot
+3500 end

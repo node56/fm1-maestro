@@ -1,0 +1,15 @@
+# v022 backward scrub: record a C5, rewind, scrub forward past it, then
+# BACKWARD across it -- it must sound (audible scrub works both ways).
+# Free play, 72 BPM. Record C5 at x=100 (playhead after KNOB4 +10).
+# The backward pass (2600 ms) must sound C5 (523 Hz) in the WAV.
+100 enc 0 6
+300 enc 5 10
+500 btn 13
+700 keys 0x80
+1200 keys 0
+1400 btn 12
+1600 btn 12
+1800 btn 8
+2000 enc 5 30
+2600 enc 5 -30
+3200 end

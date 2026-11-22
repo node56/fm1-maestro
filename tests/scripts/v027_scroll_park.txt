@@ -1,0 +1,9 @@
+# v027 scrolling while parked: KNOB4 coarse (+1 beat = +32 px) and
+# KNOB3 fine (+4 px) still scrub a parked book piece.
+100 btn 13
+300 shot
+500 enc 5 1
+700 shot
+900 enc 4 1
+1100 shot
+1300 end

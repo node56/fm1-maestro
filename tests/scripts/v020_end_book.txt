@@ -1,0 +1,6 @@
+# v0.20 end repro: First Five Notes (book, tempo 72), PLAY, no jump -> must STOP
+# piece is 4 bars = 512px; scroll 38.4 px/s; end+240 stop at scroll>772 (~20s)
+500 btn 12
+14000 shot
+21000 shot
+26000 end

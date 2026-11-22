@@ -1,0 +1,30 @@
+T
+100 btn 13
+500 keys 0x80
+700 keys 0
+1500 shot
+2047 keys 0x800
+2247 keys 0
+2880 keys 0x1000
+3080 keys 0
+3713 keys 0x4000
+3913 keys 0
+4547 keys 0x1000
+4747 keys 0
+5380 keys 0x800
+5580 keys 0
+6213 keys 0x200
+6413 keys 0
+7047 keys 0x80
+7247 keys 0
+7880 keys 0x200
+8080 keys 0
+8713 keys 0x800
+8913 keys 0
+9547 keys 0x200
+9747 keys 0
+10380 keys 0x80
+10580 keys 0
+14600 shot
+27000 shot
+28500 end

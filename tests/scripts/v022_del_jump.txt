@@ -1,0 +1,27 @@
+# v0.22 delete a jump, two ways (EDIT = delete head)
+# 1) scrub-erase: insert a jump at the playhead (208), move the
+# playhead before it (KNOB4 -3 -> 112), EDIT on, scrub forward
+# across it (KNOB4 +4 -> 240). The delete head erases what it
+# crosses, so the jump at 208 is removed. (Scrubbing away from a
+# jump that sits exactly on the playhead does not cross it -- the
+# backward range is [lo,hi) by design -- so the test moves before
+# the jump first and crosses it going forward.)
+# 2) play-erase: re-insert a jump, EDIT on, PLAY through it. The
+# delete head erases it instead of looping, and PLAY stays on.
+# Free play, 72 BPM. Film log at 2 fps: rows every 500 ms, so LED
+# checks are timed to the row after each transition.
+T
+100 enc 0 6
+300 enc 5 5
+500 btn 11
+700 shot
+900 enc 5 -3
+1100 btn 6
+1300 enc 5 4
+1500 shot
+1700 btn 6
+1900 btn 11
+2100 shot
+2300 btn 6
+2500 btn 12
+6100 end

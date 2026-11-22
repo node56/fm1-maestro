@@ -1,0 +1,15 @@
+# v023 playback: a note recorded in REC must play back in ST_PLAY
+# (normal playback, unchanged by the fix). Free play, 72 BPM.
+# Record C5 at x=112 (KNOB4 +2 beats from scroll 0), rewind, PLAY.
+# The playhead reaches x=112 at scroll 52, ~1.35 s after PLAY (2000 ms),
+# so the C5 sounds at ~3350 ms in ST_PLAY.
+100 enc 0 6
+300 enc 5 2
+500 btn 13
+700 keys 0x80
+1200 keys 0
+1400 btn 12
+1600 btn 12
+1800 btn 8
+2000 btn 12
+5000 end

@@ -1,0 +1,45 @@
+100 T
+300 enc 0 -1
+1000 keys 0x80
+1200 keys 0
+1505 keys 0x80
+1705 keys 0
+2130 keys 0x80
+2330 keys 0
+2755 keys 0x80
+2955 keys 0
+3380 keys 0x80
+3580 keys 0
+4005 keys 0x80
+4205 keys 0
+4630 keys 0x80
+4830 keys 0
+5255 keys 0x80
+5455 keys 0
+5880 keys 0x80
+6080 keys 0
+6505 keys 0x80
+6705 keys 0
+7130 keys 0x80
+7330 keys 0
+7755 keys 0x80
+7955 keys 0
+8380 keys 0x80
+8580 keys 0
+9005 keys 0x80
+9205 keys 0
+9630 keys 0x80
+9830 keys 0
+10255 keys 0x80
+10455 keys 0
+21500 keys 0x80
+21700 keys 0
+22630 keys 0x100000
+22830 keys 0
+23880 keys 0x100000
+24080 keys 0
+25130 keys 0x100000
+25330 keys 0
+42000 keys 0x80
+42200 keys 0
+46000 end

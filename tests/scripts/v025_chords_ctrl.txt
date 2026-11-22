@@ -1,0 +1,13 @@
+# v025 chords control: the same chord played live in PLAY (no REC)
+# The WAV over the held chord (500-1000 ms) must match v025_chords:
+# in REC the chord sounds once, via the ghost. After the rewind the
+# control plays back silence (nothing was recorded).
+T
+100 enc 0 6
+300 btn 12
+500 keys 0xA80
+1000 keys 0
+1200 btn 12
+1400 btn 8
+1600 btn 12
+4000 end

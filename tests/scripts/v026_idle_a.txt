@@ -1,0 +1,12 @@
+# v026 idle A: the screen blanks after IDLE_BLACK_MS (120000 ms) with
+# no input; an input before the deadline resets the timer; a key press
+# wakes the screen (and sounds). No input ever happens before 60 s.
+500 shot
+60000 enc 2 1
+150000 shot
+185000 shot
+190000 keys 0x80
+190200 shot
+190500 keys 0
+191000 shot
+192000 end

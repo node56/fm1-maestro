@@ -1,0 +1,52 @@
+# All 5 presets x lowest key at oct -1 (MIDI 41) and oct -2 (MIDI 29).
+# Hold 1.5 s, release, ring 1 s. Preset 0 = E.PIANO 4 (default).
+# Preset 0
+200 btn 0
+400 keys 0x1
+1900 keys 0
+2900 btn 0
+3100 keys 0x1
+4600 keys 0
+5600 btn 1
+5700 btn 1
+5800 enc 6 1
+# Preset 1 (PIANO 1)
+6000 btn 0
+6200 keys 0x1
+7700 keys 0
+8700 btn 0
+8900 keys 0x1
+10400 keys 0
+11400 btn 1
+11500 btn 1
+11600 enc 6 1
+# Preset 2 (E.PIANO 3)
+11800 btn 0
+12000 keys 0x1
+13500 keys 0
+14500 btn 0
+14700 keys 0x1
+16200 keys 0
+17200 btn 1
+17300 btn 1
+17400 enc 6 1
+# Preset 3 (PIANO 5)
+17600 btn 0
+17800 keys 0x1
+19300 keys 0
+20300 btn 0
+20500 keys 0x1
+22000 keys 0
+23000 btn 1
+23100 btn 1
+23200 enc 6 1
+# Preset 4 (E.PIANO 1)
+23400 btn 0
+23600 keys 0x1
+25100 keys 0
+26100 btn 0
+26300 keys 0x1
+27800 keys 0
+28800 btn 1
+28900 btn 1
+29100 end

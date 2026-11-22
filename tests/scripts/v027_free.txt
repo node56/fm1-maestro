@@ -1,0 +1,12 @@
+# v027 Free Play unchanged: SELECT to free, PLAY/stop, arm REC, and an
+# arbitrary note (key 3) still auto-starts the tape (no kick-off
+# rule in free play). Film log: PLAY = bit 12, REC = bit 13.
+T
+100 enc 0 6
+300 btn 12
+500 btn 12
+700 btn 13
+1000 keys 0x8
+2000 keys 0
+2500 btn 12
+3000 end

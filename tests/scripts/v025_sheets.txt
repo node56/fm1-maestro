@@ -1,0 +1,29 @@
+# v025 per-sheet switching: SELECT from anywhere (on the tape, no HOME)
+# Free play. Record a C5, stop the tape, and switch sheets while
+# stopped on the tape: the take and the offset must survive the round
+# trip exactly (shot C == shot A). Then tempo 200 on free play, PLAY,
+# and switch sheets WHILE MOVING: the tape keeps moving, at the new
+# sheet's tempo (72 BPM), and the PLAY LED stays on across the switch.
+# key 7 = C5 (MIDI 60). Film log at 2 fps: PLAY LED is bit 12.
+# (v0.26: the book has 8 slots -- the song sits at index 7 -- so the
+# moving switch from free play (6) steps +2 to land on sheet 0.)
+T
+100 enc 0 6
+300 btn 13
+500 keys 0x80
+700 keys 0
+900 btn 12
+1000 btn 13
+1100 shot
+1300 enc 0 1
+1500 shot
+1700 enc 0 -1
+1900 shot
+2100 enc 2 64
+2300 btn 12
+2500 shot
+3500 shot
+3700 enc 0 2
+3900 shot
+4900 shot
+5100 end

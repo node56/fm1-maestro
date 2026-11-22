@@ -1,0 +1,6 @@
+# v0.19 end-of-piece test: drill (4 bars), tempo 200, no jump -> must STOP at the end
+100 enc 0 5
+300 enc 2 64
+500 btn 12
+9000 shot
+9200 end

@@ -5,8 +5,8 @@
  * there is no runtime lesson parser, practice engine, or grading
  * in the firmware any more, so there is nothing to unit-test there.
  * The screen, sound, transport, knobs, and presets are covered by
- * the host-mode scripted tests (tests/scripts in the Dinghy build
- * tree) run from the build tree.
+ * the host-mode scripted suites (tests/*_verify.py, scripts in
+ * tests/scripts), run from the repo via tests/run_all.py.
  *
  * gcc -Wall -Wextra -std=c99 -I ../firmware/src test_core.c -o test_core
  * ./test_core

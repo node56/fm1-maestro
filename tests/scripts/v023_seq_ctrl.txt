@@ -1,0 +1,10 @@
+# v023 sequence control: the same 3 notes in ST_PLAY (live only, not
+# recorded). The REC WAV (v023_seq) must be identical to this one.
+100 btn 12
+1000 keys 0x80
+1500 keys 0
+1700 keys 0x200
+2200 keys 0
+2400 keys 0x800
+2900 keys 0
+4000 end

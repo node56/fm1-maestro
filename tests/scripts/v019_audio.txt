@@ -1,0 +1,29 @@
+# v0.19 preset audio verification
+# key 7 = MIDI 60 (C5, 523.25 Hz), key 19 = MIDI 72 (C6, 1046.5 Hz)
+# one C5 + one C6 per preset, knob turned between notes (no note sounding)
+# preset order: 0 E.PIANO 4 (default), 1 PIANO 1, 2 E.PIANO 3, 3 PIANO 5, 4 E.PIANO 1
+200 keys 0x80
+1200 keys 0
+1500 keys 0x80000
+2500 keys 0
+2800 enc 6 1
+3000 keys 0x80
+4000 keys 0
+4300 keys 0x80000
+5300 keys 0
+5600 enc 6 1
+5800 keys 0x80
+6800 keys 0
+7100 keys 0x80000
+8100 keys 0
+8400 enc 6 1
+8600 keys 0x80
+9600 keys 0
+9900 keys 0x80000
+10900 keys 0
+11200 enc 6 1
+11400 keys 0x80
+12400 keys 0
+12700 keys 0x80000
+13700 keys 0
+14000 end

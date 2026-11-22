@@ -1,0 +1,6 @@
+# isolated C6 (key 19 = MIDI 72) and C5 (key 7 = MIDI 60), clean gaps
+500 keys 0x80000
+2000 keys 0
+3000 keys 0x80
+4500 keys 0
+5500 end

@@ -1,0 +1,15 @@
+# v027 terrible take: kick off with C5, play one wrong note (key 1),
+# then nothing -- 1 of 13 notes matched is terrible. v0.25: at the
+# end of the piece the take first REPLAYS (~13.4 s), then the SAME
+# piece reloads, parked, with the take cleared. Shots at
+# 28000/29500 (after the load) must be identical (parked, not
+# rolling) and show piece 0's first note at the cursor.
+T
+100 btn 13
+500 keys 0x80
+800 keys 0
+2000 keys 0x2
+2300 keys 0
+28000 shot
+29500 shot
+31000 end

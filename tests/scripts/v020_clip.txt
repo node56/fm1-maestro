@@ -1,0 +1,11 @@
+# v0.20 clipping repro: book (First Five Notes), then a high ghost note
+# key 26 = top key (MIDI 79, G5); OCT+ makes it higher
+100 shot
+300 keys 0x4000000
+500 shot
+700 keys 0
+900 btn 1
+1100 keys 0x4000000
+1300 shot
+1500 keys 0
+1700 end

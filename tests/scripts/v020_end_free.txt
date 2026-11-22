@@ -1,0 +1,10 @@
+# v0.20 end repro 2: free play, REC + note (auto-start -> ST_REC), no marked end
+# if it never stops, PLAY stays bright to the end of the script
+100 enc 0 6
+300 btn 13
+500 keys 0x80
+700 keys 0
+900 keys 0x80
+1100 keys 0
+15000 shot
+25000 end

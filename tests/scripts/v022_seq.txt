@@ -1,0 +1,14 @@
+# v0.22 SEQ toggle: insert a jump, SEQ again at the same spot removes it
+# The SEQ LED (bit 11) follows has_jump(). Insert at 500 ms, remove
+# at 1500 ms -- spaced so the 2 fps film log captures the bright
+# state in between (a 500 ms window would fall between log rows).
+# Free play, 72 BPM. The jump is a double bar (two lines 5px apart);
+# the free-play bar lines are 128px apart, so a 5px pair is the jump.
+T
+100 enc 0 6
+300 enc 5 5
+500 btn 11
+700 shot
+1500 btn 11
+1700 shot
+2000 end

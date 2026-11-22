@@ -1,0 +1,9 @@
+# v023 REC double trigger (reproduction)
+# PLAY (btn 12) -> ST_PLAY; REC (btn 13) -> ST_REC; key 7 (C5, MIDI 60)
+# at 1000 ms, held to 3000 ms. If the note double-triggers, the WAV
+# shows two attacks (rise, dip to near zero, rise again) after 1000 ms.
+100 btn 12
+500 btn 13
+1000 keys 0x80
+3000 keys 0
+4000 end

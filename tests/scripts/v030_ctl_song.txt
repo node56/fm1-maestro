@@ -1,0 +1,8 @@
+100 T
+300 enc 0 -1
+600 shot
+1000 keys 0x80
+1300 keys 0
+2200 shot
+3700 shot
+4200 end

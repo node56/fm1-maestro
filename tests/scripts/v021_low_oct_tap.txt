@@ -1,0 +1,16 @@
+# Tap test: press each note briefly (150 ms), release, let it ring 2 s.
+# Compare ring decay of low notes (oct -1/-2) vs C5 control.
+# M41 (oct-1 lowest), M29 (oct-2 lowest), M60 (C5 control), M53 (F3 oct0).
+200 btn 0
+400 keys 0x1
+550 keys 0
+2600 btn 0
+2800 keys 0x1
+2950 keys 0
+5000 btn 1
+5100 btn 1
+5300 keys 0x80
+5450 keys 0
+7500 keys 0x1
+7650 keys 0
+9700 end

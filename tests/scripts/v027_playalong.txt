@@ -1,0 +1,8 @@
+# v027 play-along: PLAY (no REC) rolls from the park and just stops
+# at the end of the piece, as before -- no auto-load. The two late
+# shots are the stopped end view, not a parked first note.
+T
+100 btn 12
+14000 shot
+15500 shot
+16500 end

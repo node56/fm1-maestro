@@ -1,0 +1,11 @@
+# v022 preset wrap: PRESETS +1 past the last patch wraps to E.PIANO 4;
+# -1 from E.PIANO 4 wraps to E.PIANO 1. Verified by the sound: the note
+# after +5 must be dark (E.PIANO 4), the note after -1 brighter (E.PIANO 1).
+# key 7 = C5 (MIDI 60).
+100 enc 6 5
+300 keys 0x80
+1300 keys 0
+1600 enc 6 -1
+1800 keys 0x80
+2800 keys 0
+3100 end

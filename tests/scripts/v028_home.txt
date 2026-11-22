@@ -1,0 +1,17 @@
+# v028 HOME retry (stopped take): record C5 and a visible wrong
+# note (G5, key 14), stop with PLAY, then HOME: the manual retry
+# -- the take is cleared and the piece parked (4000 == the clean
+# park). HOME again, parked with an empty take, goes to the book
+# (5000 == the book page).
+T
+100 btn 13
+500 keys 0x80
+800 keys 0
+1500 keys 0x4000
+1800 keys 0
+2500 btn 12
+3500 btn 8
+4000 shot
+4500 btn 8
+5000 shot
+5500 end

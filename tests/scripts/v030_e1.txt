@@ -1,0 +1,14 @@
+100 T
+400 shot
+500 btn 12
+800 btn 12
+1500 keys 0x80
+1800 keys 0
+2000 shot
+2600 shot
+3200 btn 8
+3800 keys 0x80
+4100 keys 0
+4400 shot
+5600 shot
+6000 end

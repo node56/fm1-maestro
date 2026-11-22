@@ -1,0 +1,16 @@
+# Reproduce: lowest key with OCT- = just a tap?
+# key 0 = MIDI 53 (F3) at oct 0; MIDI 41 (F2) at oct -1; MIDI 29 (F1) at oct -2
+# key 7 = MIDI 60 (C5) control. Hold each note 3 s.
+200 keys 0x1
+3200 keys 0
+3500 btn 0
+3700 keys 0x1
+6700 keys 0
+7000 btn 0
+7200 keys 0x1
+10200 keys 0
+10500 btn 1
+10700 btn 1
+11000 keys 0x80
+14000 keys 0
+14500 end

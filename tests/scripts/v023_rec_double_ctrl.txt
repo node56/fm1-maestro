@@ -1,0 +1,6 @@
+# v023 control: same key press in ST_PLAY (not recording) — the note is
+# live only, not recorded, so play_frame cannot re-trigger it: one attack.
+100 btn 12
+1000 keys 0x80
+3000 keys 0
+4000 end

@@ -1,0 +1,22 @@
+# v022 tempo: KNOB1 changes tempo; the scroll speed follows it, and the
+# tempo clamps at 40..200 BPM. Free play (no end, no notes): the tape
+# runs forever and the bar lines (every 128px) scroll by.
+# Scroll speed = tempo * 32 / 60 px/s: 72 -> 38.4, 200 -> 106.7, 40 -> 21.3.
+# Shots 1 s apart; the barline shift (mod 128) is the speed.
+100 enc 0 6
+300 btn 12
+1500 shot
+2500 shot
+3000 enc 2 64
+4000 shot
+5000 shot
+5500 enc 2 -80
+6500 shot
+7500 shot
+8000 enc 2 100
+9000 shot
+10000 shot
+10500 enc 2 -100
+11500 shot
+12500 shot
+13000 end

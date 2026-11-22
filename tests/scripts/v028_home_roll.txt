@@ -1,0 +1,12 @@
+# v028 HOME retry (rolling take): the same two notes, but HOME
+# is pressed while the take is still rolling -- one press stops,
+# clears and parks (3000 == the clean park, PLAY off).
+T
+100 btn 13
+500 keys 0x80
+800 keys 0
+1500 keys 0x4000
+1800 keys 0
+2500 btn 8
+3000 shot
+3600 end

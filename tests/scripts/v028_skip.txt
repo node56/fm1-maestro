@@ -1,0 +1,15 @@
+# v028 replay skip: the same terrible take as v028_retry, but a
+# key press (F3, key 0 -- a wrong note at the park) at 15000,
+# mid-replay, skips it: the load (same piece, cleared, parked)
+# has already happened by 16000, where the no-skip run is still
+# replaying.
+T
+100 btn 13
+500 keys 0x80
+800 keys 0
+2000 keys 0x2
+2300 keys 0
+15000 keys 0x1
+15300 keys 0
+16000 shot
+17500 end

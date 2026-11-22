@@ -1,0 +1,11 @@
+# v028 boot (A): the device powers on on the tape, parked at the
+# first note. Shot at 500 (the parked view), then press the first
+# note (C5, key 7): a parked press -- it kicks the take off and
+# the sheet rolls FROM the park. Before v0.25 the boot view was
+# the book page and the press shifted the sheet 60 px right.
+T
+500 shot
+1000 keys 0x80
+1300 keys 0
+1600 shot
+2500 end

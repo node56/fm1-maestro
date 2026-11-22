@@ -1,0 +1,15 @@
+# v024 transport: PLAY toggles the velocity, REC toggles the write bit.
+# (v0.21 unified model: no `play` variable, no ST_* states.)
+# Free play, 72 BPM. Film log at 2 fps: rows every 500 ms.
+# PLAY LED (bit 12) follows velocity != 0; REC LED (bit 13) follows
+# rec_write. PLAY must stop a moving tape and start a stopped one;
+# REC must arm/disarm without touching the velocity.
+T
+100 enc 0 6
+300 btn 12
+1500 btn 12
+2500 btn 12
+3500 btn 13
+4500 btn 13
+5500 btn 12
+6500 end

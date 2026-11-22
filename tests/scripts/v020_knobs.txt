@@ -1,0 +1,12 @@
+# v0.20 knob swap: KNOB4 (enc 5) = coarse (beat), KNOB3 (enc 4) = fine (4px)
+# start in book, First Five Notes, scroll 0. barline1 at piece-x 192 -> screen 192.
+100 shot
+200 enc 5 1
+300 shot
+400 enc 5 1
+500 shot
+600 enc 4 1
+700 shot
+800 enc 4 3
+900 shot
+1000 end

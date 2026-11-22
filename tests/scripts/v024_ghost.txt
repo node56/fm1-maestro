@@ -1,0 +1,12 @@
+# v024 ghost: a key press with REC off (not recording) and the tape
+# stopped sounds once, through the playhead (a ghost note). The note
+# is live only, not recorded. The WAV must equal the ST_PLAY live-only
+# control (v023_rec_double_ctrl) over the held note: one attack, same
+# pitch and envelope, even though the tape is stopped here.
+# Free play. Key 7 = C5 (MIDI 60).
+100 enc 0 6
+300 btn 12
+500 btn 12
+1000 keys 0x80
+3000 keys 0
+4000 end

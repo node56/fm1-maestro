@@ -1,0 +1,9 @@
+# v0.20 end repro 3: First Five Notes, PLAY, SEQ at ~3s places jump at playhead
+# jump should loop to start when playhead hits it (~scroll where jump sits)
+500 btn 12
+3000 btn 11
+6000 shot
+9000 shot
+12000 shot
+16000 shot
+20000 end

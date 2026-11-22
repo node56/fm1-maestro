@@ -1,0 +1,7 @@
+# v027 scrolling during a take, control: same take, no knob.
+100 btn 13
+1000 keys 0x80
+1300 keys 0
+2000 shot
+4000 shot
+4500 end

@@ -1,0 +1,5 @@
+100 T
+500 shot
+2200 shot
+3700 shot
+4200 end

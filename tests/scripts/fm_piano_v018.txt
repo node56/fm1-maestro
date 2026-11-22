@@ -1,0 +1,18 @@
+# v0.18 FM piano (DX7 E.PIANO 4) host verification
+# key k -> MIDI 53+k (MIDI 60 = 523.25 Hz in this firmware's convention)
+# key 0 = MIDI 53 (370 Hz), key 7 = MIDI 60 (523 Hz), key 19 = MIDI 72 (1046 Hz), key 26 = MIDI 79 (2093 Hz)
+200 keys 0x1
+1200 keys 0
+1500 keys 0x80
+2500 keys 0
+2800 keys 0x80000
+3800 keys 0
+4100 keys 0x4000000
+5100 keys 0
+5400 keys 0x81
+6400 keys 0
+6700 btn 1
+6900 keys 0x80
+7900 keys 0
+8200 shot
+8500 end

@@ -1,0 +1,20 @@
+# v0.19 scrub + overdub audio verification
+# key 7 = C5 (MIDI 60, 523 Hz). Free play, 72 BPM (38.4 px/s).
+# 1) record a C5 at x=100 (playhead after KNOB4 +10 from scroll 0)
+100 enc 0 6
+300 enc 5 10
+500 btn 13
+700 keys 0x80
+1200 keys 0
+1400 btn 12
+1600 btn 12
+# 2) rewind, then scrub forward across the note: it must SOUND (feature 8)
+1800 btn 8
+2000 enc 5 30
+# 3) rewind, PLAY, punch in REC before the note: it must sound during REC (feature 4)
+2800 btn 8
+3000 btn 12
+3400 btn 13
+4600 btn 12
+4800 btn 12
+5000 end

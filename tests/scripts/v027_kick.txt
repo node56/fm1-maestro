@@ -1,0 +1,14 @@
+# v027 kick-off (REC armed): parked at piece 0, press C5 (key 7) ->
+# the take kicks off: REC stays on, the tape rolls, the note is
+# recorded. (The HOME at 3500 is the v0.25 manual retry: it clears
+# the take and parks -- the 4000 shot is the clean park.)
+T
+100 shot
+200 btn 13
+400 shot
+1000 keys 0x80
+2900 shot
+3000 keys 0
+3500 btn 8
+4000 shot
+4500 end

@@ -1,0 +1,9 @@
+# v027 kick-off recording proof, control: identical, but the parked
+# press is a WRONG note (key 0) -- it sounds, records nothing, the
+# tape never starts, and the switch back is silent.
+100 btn 13
+1000 keys 0x1
+1600 keys 0
+2600 enc 0 1
+3000 enc 0 -1
+4600 end

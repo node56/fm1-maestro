@@ -16,9 +16,13 @@ git clone <your-repo-url> fm1-maestro && cd fm1-maestro
 #        firmware/src/maestro.c firmware/src/{drills,ui,fm_piano,store}.*
 #        firmware/src/{drills,fm_tables,glyphs,lesson,mstore}.h
 #        tools/lessons2c.py web-installer/ tests/
-# (keep the template's platform.c, hal/, build.sh, tools/fm1_install.py,
+# (keep the template's hal/, build.sh, tools/fm1_install.py,
 #  .github/workflows, tests/run_host.sh, tests/run_tests.sh)
 ```
+
+One exception to "keep the template's": since v0.27 this repo ships
+its own `platform.c` (and `dinghy.c`) in `firmware/overlay/` — see
+`BUILDING.md` for the exact file map and the test runner.
 
 Rename nothing else until the unchanged template builds on your machine.
 

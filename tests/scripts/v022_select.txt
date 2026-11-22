@@ -1,0 +1,27 @@
+# v0.22 SELECT wrap + take preserved (per sheet)
+# SELECT wraps at both ends (6->0 on +1, 0->6 on -1); changing the
+# piece keeps the take (v0.22: one unified MIDI list, per-sheet
+# blocks), so the free-play screen after the round trip (2300 ms)
+# must match the screen with the note (1300 ms), not the clean
+# reference (200 ms). The two First Five Notes shots (1900, 2700)
+# must also match -- the wrap is deterministic.
+# key 7 = C5 (MIDI 60). SELECT only works in ST_BOOK, so the tape is
+# stopped (PLAY) and HOME is pressed twice (rewind, then back to the
+# book) before the first SELECT.
+T
+100 enc 0 6
+200 shot
+300 btn 13
+500 keys 0x80
+700 keys 0
+900 btn 12
+1100 btn 8
+1300 shot
+1500 btn 8
+1700 enc 0 1
+1900 shot
+2100 enc 0 -1
+2300 shot
+2500 enc 0 1
+2700 shot
+3000 end

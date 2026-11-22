@@ -1,0 +1,10 @@
+# v027 kick-off (REC never armed): enter parked, arm then disarm REC,
+# then press C5 -> the kick-off itself turns REC on and rolls.
+T
+100 btn 13
+400 btn 13
+900 shot
+1000 keys 0x80
+1800 keys 0
+2500 shot
+3000 end

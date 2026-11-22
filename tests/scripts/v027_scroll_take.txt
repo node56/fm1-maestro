@@ -1,0 +1,9 @@
+# v027 scrolling during a take: KNOB4 while the kicked-off take rolls
+# snaps the playhead to the next beat (control: v027_scroll_take_ctrl).
+100 btn 13
+1000 keys 0x80
+1300 keys 0
+2000 shot
+2500 enc 5 1
+4000 shot
+4500 end

@@ -1,0 +1,6 @@
+# v022 settings: SELECT changes the book selection; the settings save
+# must fire (after the 10 s throttle) so the selection persists.
+# Maestro keeps its settings in flash blob 0, so the save is visible
+# in stdout as "blob 0 saved".
+100 enc 0 2
+12000 end

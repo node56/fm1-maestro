@@ -1,0 +1,13 @@
+# v023 sequence: record 3 notes in sequence in REC (C5, D5, E5).
+# Each must sound once. Compare against v023_seq_ctrl (same notes in
+# ST_PLAY, live only): the WAVs must be identical.
+# Key 7 = C5 (0x80), key 9 = D5 (0x200), key 11 = E5 (0x800).
+100 btn 12
+500 btn 13
+1000 keys 0x80
+1500 keys 0
+1700 keys 0x200
+2200 keys 0
+2400 keys 0x800
+2900 keys 0
+4000 end

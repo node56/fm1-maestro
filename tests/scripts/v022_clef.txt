@@ -1,0 +1,12 @@
+# v022 bass clef: OCT- switches the staff to bass (F clef) and shows -1;
+# OCT+ switches back to treble. A low note draws on the bass staff.
+# The 100 ms and 1500 ms shots (both treble, scroll 0) must match.
+100 shot
+300 btn 0
+500 shot
+700 keys 0x1
+900 shot
+1100 keys 0
+1300 btn 1
+1500 shot
+1700 end
