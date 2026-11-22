@@ -192,6 +192,19 @@
  * unplayed part). Voices: the part in your hands is LIVE and
  * always wins; backing parts are dropped before they can steal
  * a live voice (fm_piano.c).
+ *
+ * v0.28: a refactoring round -- no behaviour change. The session
+ * state flags (transport, sheet kind, song and part, replay) are
+ * gathered in one place, and every "what state are we in" question
+ * is asked through a named predicate (the "session state: the
+ * predicates" section: moving, recording, in_book_view,
+ * on_free_play, on_song, on_guided_sheet, replaying_now,
+ * assembly_playing, deleting, free_end_marked, part_is_done,
+ * cur_part_done, and at_kick_park below). Handlers, the renderer
+ * and the LED update no longer open-code derivations from the raw
+ * flags. Equivalence was proven, not assumed: the full host
+ * regression passed unchanged, and an old-vs-new sweep ran every
+ * script fixture through both binaries and diffed every artifact.
  */
 
 #include "fm_piano.c"   /* DX7 FM piano presets (E.PIANO 4 default) -- v0.19 */
@@ -308,6 +321,13 @@ static uint8_t rec_write;        /* REC: notes placed are written to the take */
 static uint8_t in_book = 1;      /* selecting a piece in the book */
 static uint8_t sel = 0;
 static uint8_t is_free = 0;
+static uint8_t is_song = 0;      /* the current sheet is the multi-part song */
+static uint8_t song_part;        /* index into ode_song.parts (learning order) */
+static uint8_t song_done[SONG_MAX_PARTS];   /* parts with a completed take */
+static uint8_t assembly;         /* the finished assembly is playing back */
+static uint8_t replaying;        /* a finished take is playing back (v0.25) */
+static uint8_t replay_terrible;  /* the verdict the replay ends into */
+static uint8_t free_end_set = 0; /* SAVE: a free-play take has a marked end */
 static uint8_t delete_head = 0;  /* EDIT: the playhead erases instead of playing */
 #define PRESET_NOTICE_MS 2000u  /* how long the patch name shows */
 static uint32_t preset_notice_until;  /* fm1_ms until the patch name clears */
@@ -324,9 +344,33 @@ static uint32_t keys_down;   /* bit k = key k currently down (main loop) */
 static uint32_t last_input_ms;   /* fm1_ms of the last input */
 static uint8_t screen_blank;     /* 1 = blanked: the draw entry points all no-op */
 
-/* moving = the timestamp advances; recording = notes are stored. */
-static uint8_t moving(void) { return velocity != 0; }
-static uint8_t recording(void) { return rec_write; }
+/* ---- session state: the predicates ----
+ * Every "what state are we in" question the firmware asks is
+ * answered here, by a named predicate over the state above.
+ * Handlers, the renderer and the LED update call these, never
+ * the raw flags, so each state derivation lives in exactly one
+ * place and cannot drift into a subtly different copy at another
+ * site (the v0.26 kick-off bug was an open-coded park test that
+ * no other site shared). at_kick_park(), with the practice loop
+ * below, is part of this family. The mutations are not here:
+ * set_velocity/toggle_play flip the velocity, set_rec_write/
+ * toggle_rec flip the write bit, setup_piece derives the sheet
+ * kind from the selection, and the load/restore paths write the
+ * flags (and occasionally the velocity, to avoid set_velocity's
+ * side effects) directly -- those are the state being set, not
+ * state being asked about. */
+static uint8_t moving(void) { return velocity != 0; }              /* the tape rolls */
+static uint8_t recording(void) { return rec_write; }               /* notes placed are written to the take */
+static uint8_t in_book_view(void) { return in_book; }              /* selecting a piece, not on the tape */
+static uint8_t on_free_play(void) { return is_free; }              /* the current sheet is Free Play */
+static uint8_t on_song(void) { return is_song; }                   /* the current sheet is the multi-part song */
+static uint8_t on_guided_sheet(void) { return !is_free; }          /* a sheet with a blue guide: a book piece or a song part */
+static uint8_t replaying_now(void) { return replaying; }           /* a finished take (or the assembly) is playing back */
+static uint8_t assembly_playing(void) { return assembly; }         /* that playback is the finished assembly, not an inspection */
+static uint8_t deleting(void) { return delete_head; }              /* the playhead erases instead of sounding */
+static uint8_t free_end_marked(void) { return is_free && free_end_set; }   /* a free-play end is marked on this sheet */
+static uint8_t part_is_done(uint8_t p) { return song_done[p]; }    /* song part p has a completed take */
+static uint8_t cur_part_done(void) { return is_song && song_done[song_part]; }   /* the part in your hands is already learned */
 /* the scroll offset for rendering: the playhead is fixed at CURSOR_X,
  * so the sheet scrolls under it. The renderer is a pure function of
  * the playhead timestamp. */
@@ -354,7 +398,6 @@ static void show_oct(void) {
 }
 
 
-static uint8_t free_end_set = 0; /* SAVE: a free-play take has a marked end */
 static uint32_t free_end_x = 0;  /* piece-x of the marked end (free play) */
 static uint32_t tempo = 72u;
 static const lesson_t *pl;
@@ -385,7 +428,7 @@ static void show_tempo(void) {
  * name is showing, the hint waits -- the name is the more important
  * thing to read. */
 static const char *hint_for_transport(void) {
-    if (in_book) return "SELECT flip PLAY start";
+    if (in_book_view()) return "SELECT flip PLAY start";
     if (!moving() && !recording()) return "PLAY go REC arm SEQ";
     if (moving() && !recording()) return "PLAY stop REC in";
     if (moving() && recording()) return "REC out PLAY stop";
@@ -443,11 +486,10 @@ static uint32_t sheet_end_x[NBOOK];
 #define DRUM_PITCH 38u   /* the percussion channel sounds at this pitch, whichever pad key was hit */
 #define CLS_LIVE 0u      /* the part in your hands: its notes always win voices */
 #define CLS_BACK 1u      /* a completed part, playing as backing */
-static uint8_t is_song = 0;
+/* the song state flags (is_song, song_part, song_done, assembly)
+ * are declared with the transport state above, where the session
+ * predicates can see them. */
 static lesson_t song_lesson;
-static uint8_t song_part;                    /* index into ode_song.parts (learning order) */
-static uint8_t song_done[SONG_MAX_PARTS];    /* parts with a completed take */
-static uint8_t assembly;                     /* the finished assembly is playing back */
 
 /* the channel notes are written to / judged against right now:
  * the current part's on the song, channel 0 anywhere else. */
@@ -700,7 +742,7 @@ static uint8_t midi_held(uint8_t midi) {
  * is LIVE when its channel is the part in your hands, BACKING
  * when it is a completed part playing along. */
 static void route_event(uint8_t ch, uint8_t pitch, uint8_t *patch, uint8_t *tpitch) {
-    if (is_song) {
+    if (on_song()) {
         if (ch == CH_BASS) { *patch = PATCH_BASS; *tpitch = pitch > 12u ? (uint8_t)(pitch - 12u) : pitch; return; }
         if (ch == CH_PERC) { *patch = PATCH_DRUM; *tpitch = DRUM_PITCH; return; }
     }
@@ -708,7 +750,7 @@ static void route_event(uint8_t ch, uint8_t pitch, uint8_t *patch, uint8_t *tpit
     *tpitch = pitch;
 }
 static uint8_t event_cls(uint8_t ch) {
-    return (is_song && ch != cur_channel()) ? CLS_BACK : CLS_LIVE;
+    return (on_song() && ch != cur_channel()) ? CLS_BACK : CLS_LIVE;
 }
 
 /* Sound a note once. This is the only place piano_on_p is called.
@@ -789,10 +831,10 @@ static uint8_t playhead_sound(uint32_t from, uint32_t to, uint8_t mode) {
             else in_range = (t >= lo && t < hi);
             if (!in_range) { t_prev = t; i++; continue; }
             if (mev_is_jump(&rec[i])) {
-                if (delete_head) { remove_rec(i); end--; continue; }
+                if (deleting()) { remove_rec(i); end--; continue; }
                 t_prev = t; i++;
             } else if (mev_is_note_on(&rec[i])) {
-                if (delete_head) { remove_note_pair(i); end = sheet_notes_end(sel); continue; }
+                if (deleting()) { remove_note_pair(i); end = sheet_notes_end(sel); continue; }
                 {
                     uint8_t patch, tpitch, ch = mev_channel(&rec[i]);
                     route_event(ch, rec[i].d1, &patch, &tpitch);
@@ -822,7 +864,7 @@ static uint8_t playhead_sound(uint32_t from, uint32_t to, uint8_t mode) {
         uint32_t t = (pb_idx >= b && pb_idx < end) ? mev_abs(rec, b, pb_idx) : 0;
         while (pb_idx < end && t <= to_t) {
             if (mev_is_jump(&rec[pb_idx])) {
-                if (delete_head) {
+                if (deleting()) {
                     remove_rec(pb_idx); end--;   /* next event shifts in; re-examine it */
                 } else if (mode == MODE_PLAY) {
                     return 1;  /* the jump loops; the caller wraps the tape */
@@ -831,7 +873,7 @@ static uint8_t playhead_sound(uint32_t from, uint32_t to, uint8_t mode) {
                     if (pb_idx < end) t += rec[pb_idx].delta;
                 }
             } else if (mev_is_note_on(&rec[pb_idx])) {
-                if (delete_head) {
+                if (deleting()) {
                     remove_note_pair(pb_idx); end = sheet_notes_end(sel);
                 } else {
                     uint8_t m = rec[pb_idx].d1;
@@ -906,7 +948,7 @@ static void render_window(uint32_t sc) {
         }
     }
     ui_plane_black();
-    if (is_free) {
+    if (on_free_play()) {
         /* free play has bar lines built in: they scroll by like in a
          * book piece, a bar every 128px (4/4, bar_ticks = 384).
          * Start at the first bar at or after sc, not at bar 1: the
@@ -922,7 +964,7 @@ static void render_window(uint32_t sc) {
             if (bx >= sc) ui_bar(bx - sc);
         }
     }
-    if (is_free && free_end_set) {
+    if (free_end_marked()) {
         /* the marked end of a free-play take */
         int32_t ex = (int32_t)free_end_x - (int32_t)sc;
         if (ex >= 0 && ex < 240) ui_endbar((uint32_t)ex);
@@ -989,7 +1031,7 @@ static void render_book(void) {
  * already repaints everything. */
 static void redraw_now(void) {
     char title[44];
-    if (in_book) { render_book(); return; }
+    if (in_book_view()) { render_book(); return; }
     ui_paper();
     render_window(scroll_now());
     book_title(title);
@@ -1015,7 +1057,7 @@ static void blank_screen(void) {
 static void apply_octave(void) {
     ui_set_clef(oct_shift < 0);
     show_oct();
-    if (in_book) render_book();
+    if (in_book_view()) render_book();
     else render_window(scroll_now());
 }
 
@@ -1054,7 +1096,7 @@ static void load_song_part(void) {
 static void setup_piece(void) {
     is_free = (sel == FREE_IDX);
     is_song = (sel == SONG_IDX);
-    if (is_free) {
+    if (on_free_play()) {
         evn = 0;
         total_ticks = 0;
         bar_ticks = 384u;   /* 4/4: a bar is 128px, for the built-in bar lines */
@@ -1062,7 +1104,7 @@ static void setup_piece(void) {
          * it is the symbol that shows which clef the staff is in. */
         psym_n = 0;
         psym[psym_n].x = CLEF_X; psym[psym_n].type = SYM_CLEF; psym_ev[psym_n] = -1; psym_n++;
-    } else if (is_song) {
+    } else if (on_song()) {
         load_song_part();
         pl = &song_lesson;
         layout_piece(pl);
@@ -1076,7 +1118,7 @@ static void setup_piece(void) {
  * KNOB1 survives starting the tape. */
 static void select_piece(void) {
     setup_piece();
-    tempo = is_free ? FREE_TEMPO : pl->tempo;
+    tempo = on_free_play() ? FREE_TEMPO : pl->tempo;
 }
 
 /* ---- the practice loop (v0.24) ----
@@ -1086,7 +1128,7 @@ static void select_piece(void) {
  * there; Free Play restores its saved offset instead. */
 static uint32_t start_x(void) {
     uint16_t i;
-    if (is_free) return CURSOR_X;
+    if (on_free_play()) return CURSOR_X;
     for (i = 0; i < evn; i++)
         if (!pl->events[i].is_rest) return evx[i];
     return CURSOR_X;   /* a piece with no notes parks at the start */
@@ -1130,7 +1172,7 @@ static void reset_take_stats(void) {
     take_matched = 0; take_wrong = 0; take_total = 0;
     for (i = 0; i < MAXEV; i++) ev_hit[i] = 0;
     kick_need_n = 0; kick_got_mask = 0;
-    if (is_free || !pl) return;
+    if (on_free_play() || !pl) return;
     for (i = 0; i < evn; i++) {
         if (pl->events[i].is_rest) continue;
         take_total++;
@@ -1200,10 +1242,10 @@ static void leds_update(void) {
             else bright = 0;
         }
         else if (b == (uint32_t)BTN_SEQ) bright = jump;
-        else if (b == (uint32_t)BTN_EDIT) bright = delete_head;
+        else if (b == (uint32_t)BTN_EDIT) bright = deleting();
         else if (b == (uint32_t)BTN_OCT_UP) bright = (oct_shift > 0);
         else if (b == (uint32_t)BTN_OCT_DOWN) bright = (oct_shift < 0);
-        else if (b == (uint32_t)BTN_SAVE) bright = (is_free && free_end_set);
+        else if (b == (uint32_t)BTN_SAVE) bright = free_end_marked();
         if (bright) { fm1_led_key(b, 1); fm1_led_key_glow(b, 0); }
         else { fm1_led_key(b, 0); fm1_led_key_glow(b, 1); }
     }
@@ -1250,7 +1292,7 @@ static void set_rec_write(uint8_t w) {
 }
 /* PLAY: if stopped, move at the tempo rate; if moving, stop. */
 static void toggle_play(void) {
-    if (velocity) set_velocity(0);
+    if (moving()) set_velocity(0);
     else set_velocity((uint32_t)tempo * PXQ);
 }
 /* REC: toggle whether notes placed are written to the take. */
@@ -1293,12 +1335,11 @@ static uint32_t last_take_px(uint8_t s) {
  * a terrible take reloads the same piece with its take cleared --
  * the retry starts clean, nothing plays along with it -- and a
  * decent one advances. The clearing happens only there, after the
- * replay has inspected the take. All of it is session state. */
-static uint8_t replaying;         /* a finished take is playing back */
-static uint8_t replay_terrible;   /* the verdict the replay ends into */
-
+ * replay has inspected the take. All of it is session state.
+ * (The replaying/replay_terrible flags are declared with the
+ * transport state above, where the session predicates live.) */
 static uint8_t replay_missed_note(uint16_t ev) {
-    return replaying && !assembly && ev < MAXEV && !ev_hit[ev];
+    return replaying_now() && !assembly_playing() && ev < MAXEV && !ev_hit[ev];
 }
 
 /* ---- the note to be played (v0.27): the keys the panel lights
@@ -1356,8 +1397,8 @@ static uint32_t target_take_keys(void) {
  * have no "next note"; a replay lights the take, anything else on
  * a guided sheet lights the guide. */
 static uint32_t target_keys(void) {
-    if (in_book || is_free) return 0;
-    if (replaying) return target_take_keys();
+    if (in_book_view() || on_free_play()) return 0;
+    if (replaying_now()) return target_take_keys();
     if (!pl || !evn) return 0;
     return target_guide_keys();
 }
@@ -1477,7 +1518,7 @@ static void begin_replay(void) {
     uint8_t terrible = take_terrible();
     set_velocity(0);
     replay_terrible = terrible;
-    if (is_song ? !part_take_has_notes(cur_channel()) : !sheet_take_has_notes(sel)) { replay_done(); return; }
+    if (on_song() ? !part_take_has_notes(cur_channel()) : !sheet_take_has_notes(sel)) { replay_done(); return; }
     replaying = 1;
     timestamp = CURSOR_X; timestamp_frac = 0;   /* rewind to the piece's start */
     set_velocity((uint32_t)tempo * PXQ);   /* pb_idx restarts at the start */
@@ -1496,8 +1537,8 @@ static void finish_replay(void) {
 /* a replay (or the assembly) ended, played out or skipped:
  * dispatch to the flow it belongs to. */
 static void replay_done(void) {
-    if (assembly) { end_assembly(); return; }
-    if (is_song) { song_finish_replay(); return; }
+    if (assembly_playing()) { end_assembly(); return; }
+    if (on_song()) { song_finish_replay(); return; }
     finish_replay();
 }
 
@@ -1524,7 +1565,7 @@ static void tick(void) {
     px = timestamp;
     /* the playhead is the sounding point. */
     if (playhead_sound(old_ts, px, MODE_PLAY)) {
-        if (!replaying) {
+        if (!replaying_now()) {
             loop_wrap();          /* the jump loops to the beginning */
             render_window(scroll_now());
             show_tempo();
@@ -1550,8 +1591,8 @@ static void tick(void) {
     {
         uint32_t end = 0;
         uint8_t has_end = 0;
-        if (!is_free && evn) { end = piece_end_x; has_end = 1; }
-        else if (is_free && free_end_set) { end = free_end_x; has_end = 1; }
+        if (on_guided_sheet() && evn) { end = piece_end_x; has_end = 1; }
+        else if (free_end_marked()) { end = free_end_x; has_end = 1; }
         if (has_end && px > end && !n_sounding) {
             /* a book TAKE reaching the end plays back once for
              * inspection, then loads another piece, parked
@@ -1559,15 +1600,15 @@ static void tick(void) {
              * press) loads it. On the song, a part's take does
              * the same per part (v0.26). Play-along (no REC) and
              * free play just stop, as before. */
-            if (replaying) replay_done();
-            else if (!is_free && recording()) begin_replay();
+            if (replaying_now()) replay_done();
+            else if (on_guided_sheet() && recording()) begin_replay();
             else {
                 set_velocity(0);
                 render_window(scroll_now());
             }
             return;
         }
-        if (!has_end && is_free && !keys_down &&
+        if (!has_end && on_free_play() && !keys_down &&
             last_take_px(sel) > 0 &&   /* an empty sheet has no take to stop past */
             pb_idx >= sheet_notes_end(sel) && !n_sounding &&
             px > last_take_px(sel) + END_TAIL_PX) {
@@ -1654,7 +1695,7 @@ static void enter_piece_stopped(void) {
     sheet_ts[sel] = timestamp;   /* entering a piece starts at its rest position */
     velocity = 0;
     in_book = 0;
-    if (!is_free) reset_take_stats();
+    if (on_guided_sheet()) reset_take_stats();
     render_window(scroll_now());
     show_hint();
 }
@@ -1698,7 +1739,7 @@ static uint8_t kickoff_press(uint8_t midi) {
     /* the take starts at the park itself, not at the near-park
      * spot the playhead happened to stop at (at_kick_park). */
     timestamp = start_x(); timestamp_frac = 0;
-    if (is_song && song_done[song_part]) {
+    if (cur_part_done()) {
         /* re-learning a finished part: its old take goes first --
          * a fresh take, like the terrible retry -- so the new
          * attempt is not accompanied by the previous one. The
@@ -1741,7 +1782,7 @@ static uint8_t kickoff_press(uint8_t midi) {
 static void on_key(uint8_t midi, uint32_t k) {
     /* the kick-off: a book piece parked at its first note, tape
      * stopped, and this press completed the first-note chord. */
-    if (!is_free && !in_book && !moving() && kick_need_n && at_kick_park() &&
+    if (on_guided_sheet() && !in_book_view() && !moving() && kick_need_n && at_kick_park() &&
         kickoff_press(midi)) {
         ghost[k].midi = midi;
         ghost[k].x = (uint16_t)timestamp;
@@ -1751,8 +1792,8 @@ static void on_key(uint8_t midi, uint32_t k) {
         render_window(scroll_now());
         return;
     }
-    if (recording() && !assembly) {   /* during the assembly playback a press is a ghost only: it is a listening pass, not a take */
-        if (!moving() && !is_free) {
+    if (recording() && !assembly_playing()) {   /* during the assembly playback a press is a ghost only: it is a listening pass, not a take */
+        if (!moving() && on_guided_sheet()) {
             /* a book piece, stopped, and no kick-off: the press is
              * a ghost only. In a book piece auto-start belongs to
              * the kick-off, so a stopped press never starts the
@@ -1762,7 +1803,7 @@ static void on_key(uint8_t midi, uint32_t k) {
             if (!moving()) toggle_play();   /* auto-start */
             playhead_sound(timestamp, timestamp, MODE_PLAY);
             rec_note_on(midi);
-            if (!is_free && moving()) judge_press(midi);
+            if (on_guided_sheet() && moving()) judge_press(midi);
         }
     }
     ghost[k].midi = midi;
@@ -1779,7 +1820,7 @@ static void on_key_up(uint8_t midi, uint32_t k) {
      * keeps its default length. (Free play, and any release while
      * the tape rolls, close the note as always.) Nor does a release
      * during a replay: the take is being inspected, not edited. */
-    if (recording() && !replaying && (is_free || moving())) rec_note_off(midi);
+    if (recording() && !replaying_now() && (on_free_play() || moving())) rec_note_off(midi);
     ghost[k].active = 0;
     ghost[k].sounded = 0;
     if (had_ghost) render_window(scroll_now());
@@ -1791,7 +1832,7 @@ static void on_key_up(uint8_t midi, uint32_t k) {
  * drum). Off the song this is exactly piano_off(written). */
 static void live_off(uint8_t midi) {
     uint8_t patch, tpitch;
-    if (!is_song) { piano_off(midi); return; }
+    if (!on_song()) { piano_off(midi); return; }
     route_event(cur_channel(), midi, &patch, &tpitch);
     (void)patch;
     piano_off_p(tpitch, CLS_LIVE);
@@ -1814,13 +1855,13 @@ static void restore_sheet_state(void) {
     tempo = sheet_tempo[sel];
     free_end_set = sheet_end_set[sel];
     free_end_x = sheet_end_x[sel];
-    if (!in_book) {
+    if (!in_book_view()) {
         /* a book piece is restored parked at its first note, not
          * at its saved offset (v0.24); free play restores its
          * offset as always. A restored book piece starts a fresh
          * take count. */
-        timestamp = is_free ? sheet_ts[sel] : start_x();
-        if (!is_free) reset_take_stats();
+        timestamp = on_free_play() ? sheet_ts[sel] : start_x();
+        if (on_guided_sheet()) reset_take_stats();
         timestamp_frac = 0;
         if (moving()) velocity = tempo * PXQ;
         silence_playback();
@@ -1874,7 +1915,7 @@ static void app_main(void) {
     in_book = 0;
     timestamp = start_x(); timestamp_frac = 0;
     sheet_ts[sel] = timestamp;
-    if (!is_free) reset_take_stats();
+    if (on_guided_sheet()) reset_take_stats();
 
     leds_update();  /* the panel lights follow the state */
     redraw_now();
@@ -1905,12 +1946,12 @@ static void app_main(void) {
             if ((uint8_t)s != sel) {
                 replaying = 0;   /* switching sheets abandons a replay in progress */
                 assembly = 0;
-                if (!in_book) save_sheet_state();
+                if (!in_book_view()) save_sheet_state();
                 else { sheet_tempo[sel] = tempo; sheet_end_set[sel] = free_end_set; sheet_end_x[sel] = free_end_x; }
                 sel = (uint8_t)(s % NBOOK);
                 setup_piece();
                 restore_sheet_state();
-                if (in_book) render_book();
+                if (in_book_view()) render_book();
                 else render_window(scroll_now());
                 set.sel = sel;   /* the selection persists across reboots */
                 set_dirty = 1;
@@ -1941,7 +1982,7 @@ static void app_main(void) {
              * new timestamp and keeps advancing from there at the
              * same velocity. Notes sound as the playhead passes them
              * (or are erased, delete head on). */
-            if (in_book) enter_piece_stopped();
+            if (in_book_view()) enter_piece_stopped();
             knob_coarse_scroll(e);
         }
         e = fm1_enc_take(ENC_KNOB3);
@@ -1952,7 +1993,7 @@ static void app_main(void) {
              * it enters the piece stopped, then moves the sheet. It
              * works while the sheet is moving, like KNOB4. */
             int32_t s;
-            if (in_book) enter_piece_stopped();
+            if (in_book_view()) enter_piece_stopped();
             s = (int32_t)timestamp + e * 4;
             if (s < (int32_t)CURSOR_X) s = (int32_t)CURSOR_X;
             scrub_to((uint32_t)s);
@@ -1972,7 +2013,7 @@ static void app_main(void) {
         }
         e = fm1_enc_take(ENC_KNOB2);
         if (e) had_input = 1;
-        if (e && is_song && !in_book && !moving() && !replaying) {
+        if (e && on_song() && !in_book_view() && !moving() && !replaying_now()) {
             /* KNOB2 steps between the song's parts: back to a part
              * already played, or forward as far as the first part
              * not yet played -- the assembly order is the guide,
@@ -1982,7 +2023,7 @@ static void app_main(void) {
              * KNOB2 does nothing, as before.) */
             int8_t frontier = first_part();
             int8_t p;
-            while (song_done[frontier] && next_part(frontier) >= 0) frontier = next_part(frontier);
+            while (part_is_done((uint8_t)frontier) && next_part(frontier) >= 0) frontier = next_part(frontier);
             p = (int8_t)song_part + (e > 0 ? 1 : -1);
             while (p >= 0 && p < (int8_t)ode_song.part_count && !ode_song.parts[p].event_count)
                 p = (int8_t)(p + (e > 0 ? 1 : -1));
@@ -1997,12 +2038,12 @@ static void app_main(void) {
             /* PLAY toggles the velocity: stopped -> move at the tempo
              * rate, moving -> stop. It never touches recording. In
              * the book it enters the piece, then starts it. */
-            if (in_book) {
+            if (in_book_view()) {
                 setup_piece();
                 timestamp = start_x(); timestamp_frac = 0;
                 sheet_ts[sel] = timestamp;   /* a book piece enters parked at its first note */
                 in_book = 0;
-                if (!is_free) reset_take_stats();
+                if (on_guided_sheet()) reset_take_stats();
                 render_window(scroll_now());
             }
             toggle_play();
@@ -2011,19 +2052,19 @@ static void app_main(void) {
             /* REC toggles the write bit: notes placed are written to
              * the take, or not. It never touches time. In the book
              * it enters the piece, then arms. */
-            if (in_book) {
+            if (in_book_view()) {
                 setup_piece();
                 timestamp = start_x(); timestamp_frac = 0;
                 sheet_ts[sel] = timestamp;   /* a book piece enters parked at its first note */
                 in_book = 0;
-                if (!is_free) reset_take_stats();
+                if (on_guided_sheet()) reset_take_stats();
                 render_window(scroll_now());
             }
             toggle_rec();
         }
         if (b & (1u << BTN_SEQ)) {
             /* SEQ inserts a jump at the playhead (or removes it). */
-            if (!in_book) seq_jump();
+            if (!in_book_view()) seq_jump();
         }
         if (b & (1u << BTN_EDIT)) {
             /* EDIT toggles the delete head: the playhead erases
@@ -2040,7 +2081,7 @@ static void app_main(void) {
         }
         if (b & (1u << BTN_SAVE)) {
             /* mark the end of a free-play take at the playhead */
-            if (is_free && !in_book) {
+            if (on_free_play() && !in_book_view()) {
                 free_end_x = timestamp;
                 free_end_set = 1;
                 if (!moving()) render_window(scroll_now());
@@ -2059,12 +2100,12 @@ static void app_main(void) {
              * at a scrolled position, rewind first; at the start,
              * go to the book. Free Play keeps those semantics
              * exactly -- its takes are never cleared by HOME. */
-            if (!in_book && !is_free && (is_song ? part_take_has_notes(cur_channel()) : !sheet_take_empty(sel))) {
+            if (!in_book_view() && on_guided_sheet() && (on_song() ? part_take_has_notes(cur_channel()) : !sheet_take_empty(sel))) {
                 save_if_dirty();
                 replaying = 0;
                 assembly = 0;
                 set_velocity(0);
-                if (is_song) { clear_part_take(cur_channel()); song_done[song_part] = 0; }
+                if (on_song()) { clear_part_take(cur_channel()); song_done[song_part] = 0; }
                 else clear_sheet_take(sel);
                 timestamp = start_x(); timestamp_frac = 0;
                 sheet_ts[sel] = timestamp;
@@ -2072,7 +2113,7 @@ static void app_main(void) {
                 reset_take_stats();
                 render_window(scroll_now());
                 show_hint();
-            } else if (!in_book && (moving() || recording())) {
+            } else if (!in_book_view() && (moving() || recording())) {
                 save_if_dirty();
                 setup_piece();
                 timestamp = CURSOR_X; timestamp_frac = 0;
@@ -2080,7 +2121,7 @@ static void app_main(void) {
                 velocity = 0; rec_write = 0;
                 in_book = 1;
                 render_book();
-            } else if (!in_book && !moving() && !recording()) {
+            } else if (!in_book_view() && !moving() && !recording()) {
                 save_if_dirty();
                 if (timestamp > start_x()) {
                     timestamp = start_x(); timestamp_frac = 0;
@@ -2108,7 +2149,7 @@ static void app_main(void) {
             uint32_t off = prev_keys & ~keys;
             prev_keys = keys;
             if (ed || off) had_input = 1;
-            if (ed && replaying) replay_done();   /* a key press skips the replay: the load happens first, then the press acts in the new state */
+            if (ed && replaying_now()) replay_done();   /* a key press skips the replay: the load happens first, then the press acts in the new state */
             for (k = 0; k < 27u; k++)
                 if (ed >> k & 1u) {
                     uint8_t midi = key_midi(k);
