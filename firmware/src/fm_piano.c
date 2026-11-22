@@ -93,10 +93,26 @@
  * (its operators' envelopes and routing come from the voice's
  * stored patch index, not the current preset).
  *
- * The piano-first sound rule still holds: the only sound this
- * engine makes is piano notes. There are no buzzes, beeps, clicks
- * or error sounds -- a note starts from silence (all phases and
- * envelopes at zero) and decays to silence on release.
+ * The piano-first sound rule still holds for the part you play:
+ * the only sound this engine makes for it is piano notes. There
+ * are no buzzes, beeps, clicks or error sounds -- a note starts
+ * from silence (all phases and envelopes at zero) and decays to
+ * silence on release.
+ *
+ * v0.26: two more patches live past the PRESETS knob's five --
+ * a BASS and a DRUM, the instruments of a song's backing parts
+ * (the knob never lands on them; piano_preset_count stays 5).
+ * They are FM like everything else here: the bass is a two-
+ * operator plucked stack (a fast-decaying x3 modulator over a
+ * sustained fundamental), and the drum is a kick approximation --
+ * a low sine burst whose high-ratio modulator collapses within
+ * tens of milliseconds, leaving the thump. There is no noise
+ * source in this engine, so there is no snare or hat.
+ * Voices also carry a class: LIVE (the part being played or
+ * learned -- its notes always win) or BACKING (a completed part
+ * playing along). A backing note may only take a free voice or
+ * another backing voice; if none is available the note is
+ * dropped, never stolen from the player's hands.
  */
 #include "fm_tables.h"
 
@@ -147,8 +163,32 @@ static const patch_t PATCHES[] = {
         { 99, {95, 20, 20, 50}, {99, 95,  0,  0}, -7, 0, 3, 0 },  /* OP5 carrier <- OP6 */
         { 79, {95, 29, 20, 50}, {99, 95,  0,  0},  7, 0, 3, 6 },  /* OP6 mod -> OP5, feedback */
     } },
+    /* The backing instruments (v0.26): not on the PRESETS knob.
+     * Authored in the same decoded-parameter format; Alg 5 is
+     * three independent modulator->carrier pairs, and each of
+     * these uses only the OP2->OP1 pair (the other pairs are
+     * silent: every level 0). */
+    { "BASS", 5, 0, {
+        { 99, {90, 50, 30, 60}, {99, 88, 80,  0}, 0, 0, 2, 2 },  /* OP1 carrier: sustained fundamental */
+        { 88, {99, 88, 70, 60}, {99, 30,  0,  0}, 0, 1, 2, 4 },  /* OP2 mod -> OP1, x3.00: the pluck, gone fast */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP3 silent */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP4 silent */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP5 silent */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP6 silent */
+    } },
+    { "DRUM", 5, 0, {
+        { 99, {99, 55, 50, 80}, {99,  0,  0,  0}, 0, 0, 0, 0 },  /* OP1 carrier: the thump (sine burst, ~200 ms) */
+        { 95, {99, 75, 60, 80}, {99,  0,  0,  0}, 0, 3, 0, 0 },  /* OP2 mod -> OP1, x11.00: attack crunch, collapses fast */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP3 silent */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP4 silent */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP5 silent */
+        { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP6 silent */
+    } },
 };
-#define N_PRESETS (sizeof PATCHES / sizeof PATCHES[0])
+#define N_PATCHES (sizeof PATCHES / sizeof PATCHES[0])
+#define N_PIANO_PRESETS 5u   /* the PRESETS knob's patches (indices 0..4) */
+#define PATCH_BASS 5u
+#define PATCH_DRUM 6u
 static uint8_t cur_preset;   /* session-only; resets to 0 (E.PIANO 4) on boot */
 
 /* Dexed FmCore::algorithms[32], verbatim (ops[0]=OP6 ... ops[5]=OP1).
@@ -198,13 +238,13 @@ typedef struct {
     uint8_t fb_shift;     /* 6 - feedback level */
     uint8_t carrier_mask; /* bit o set if operator o outputs to audio */
 } fmroute_t;
-static fmroute_t routes[N_PRESETS];
+static fmroute_t routes[N_PATCHES];
 static uint8_t routes_ready;
 
 static void routes_init(void) {
     uint8_t p, j;
     if (routes_ready) return;
-    for (p = 0; p < N_PRESETS; p++) {
+    for (p = 0; p < N_PATCHES; p++) {
         const uint8_t *fl = ALG_FLAGS[PATCHES[p].alg - 1];
         fmroute_t *R = &routes[p];
         R->fb_op = 0xFF;
@@ -224,10 +264,10 @@ static void routes_init(void) {
 }
 
 static void piano_preset_set(uint8_t idx) {
-    if (idx < N_PRESETS) cur_preset = idx;
+    if (idx < N_PIANO_PRESETS) cur_preset = idx;
 }
 static uint8_t piano_preset_get(void) { return cur_preset; }
-static uint8_t piano_preset_count(void) { return (uint8_t)N_PRESETS; }
+static uint8_t piano_preset_count(void) { return (uint8_t)N_PIANO_PRESETS; }
 static const char *piano_preset_name(void) { return PATCHES[cur_preset].name; }
 
 /* Dexed velocity table (VEL_DATA, 64 entries, indexed by vel>>1). */
@@ -255,6 +295,12 @@ typedef struct {
  * sum, Q15 units) is retriggered instead of stealing another voice. */
 #define VOICE_RETRIG_ENV 1000
 #define NV 6u
+/* voice classes (v0.26): LIVE notes (the part being played or
+ * learned) always win a voice; BACKING notes (a completed part
+ * playing along) may only take a free voice or another backing
+ * voice, and are dropped when neither is available. */
+#define VOICE_LIVE 0u
+#define VOICE_BACK 1u
 static struct {
     fm_op_t op[6];
     int32_t fb1, fb2;   /* feedback operator's previous two sine values, Q15 */
@@ -264,9 +310,18 @@ static struct {
     uint8_t note;
     uint8_t vel;
     uint8_t patch;      /* the preset this voice started with */
+    uint8_t cls;        /* VOICE_LIVE or VOICE_BACK */
     uint32_t age;
 } voice[NV];
 static volatile uint32_t ages;
+
+#ifdef DINGHY_HOST
+/* host-only instrumentation (the v029 suite reads these via the
+ * harness): the most voices ever sounding at once, backing notes
+ * dropped for want of a voice, and backing steals of a sounding
+ * live voice (the policy forbids them; the counter proves it). */
+uint32_t fm_host_max_active, fm_host_drops, fm_host_steal_live;
+#endif
 
 /* sine, Q15, with linear interpolation (256-entry table). */
 static int32_t fsin(uint32_t ph) {
@@ -370,23 +425,51 @@ static void eg_step(fm_op_t *o, const fmop_t *p) {
     }
 }
 
-static void piano_on(uint8_t note, uint8_t vel) {
+/* Start a note with a chosen patch and voice class. Returns 1
+ * when the note sounds, 0 when it was dropped -- which only a
+ * BACKING note can be: a backing note takes a free voice or the
+ * quietest backing voice, and when every voice is a sounding
+ * LIVE voice it is dropped rather than stealing from the
+ * player's hands. A LIVE note keeps the original policy: a voice
+ * already playing this note loudly is retriggered, otherwise
+ * the quietest voice overall goes. */
+static int piano_on_p(uint8_t note, uint8_t vel, uint8_t patch, uint8_t cls) {
     uint32_t v, pick = 0, best = 0xFFFFFFFFu;
     uint32_t base;
     uint8_t o;
     const patch_t *P;
-    if (note > 127u || !vel) return;
+    if (note > 127u || !vel || patch >= N_PATCHES) return 0;
     routes_init();
-    P = &PATCHES[cur_preset];
+    P = &PATCHES[patch];
     for (v = 0; v < NV; v++) {
         /* Voice stealing: a voice already playing this note loudly
          * is retriggered (so a repeated note does not stack two
          * voices on one pitch); otherwise the quietest voice goes.
-         * env is the carrier-gain sum, Q15 units. */
-        uint32_t score = (voice[v].note == note && voice[v].env > VOICE_RETRIG_ENV)
+         * env is the carrier-gain sum, Q15 units. A BACKING note's
+         * candidates are only free voices (target 0) and backing
+         * voices; with no candidate its best stays 0xFFFFFFFF and
+         * the note is dropped below. */
+        uint32_t score;
+        if (cls == VOICE_BACK && voice[v].target && voice[v].cls != VOICE_BACK) continue;
+        score = (voice[v].note == note && voice[v].cls == cls && voice[v].env > VOICE_RETRIG_ENV)
             ? 0u : (uint32_t)voice[v].env + 1u;
         if (score < best) { best = score; pick = v; }
     }
+    if (best == 0xFFFFFFFFu) {
+#ifdef DINGHY_HOST
+        fm_host_drops++;
+#endif
+        return 0;   /* no voice a backing note may take: dropped */
+    }
+#ifdef DINGHY_HOST
+    if (cls == VOICE_BACK && voice[pick].cls == VOICE_LIVE && voice[pick].target && voice[pick].env > 100)
+        fm_host_steal_live++;   /* the policy forbids this; count it if it ever happens */
+    {
+        uint32_t act = 1;
+        for (v = 0; v < NV; v++) if (v != pick && voice[v].target) act++;
+        if (act > fm_host_max_active) fm_host_max_active = act;
+    }
+#endif
     base = NOTE_INC[note];
     for (o = 0; o < 6; o++) {
         const fmop_t *p = &P->op[o];
@@ -413,31 +496,54 @@ static void piano_on(uint8_t note, uint8_t vel) {
     voice[pick].fb2 = 0;
     voice[pick].note = note;
     voice[pick].vel = vel;
-    voice[pick].patch = cur_preset;
+    voice[pick].patch = patch;
+    voice[pick].cls = cls;
     voice[pick].age = ++ages;
-    voice[pick].env = 1;
+    /* env is the allocator's loudness measure, recomputed by the
+     * render loop from the carrier gains. Until the first render
+     * measures it, a just-struck note must not read as quiet:
+     * with a token small value the next allocation in the same
+     * tick (a song's parts striking together) would steal this
+     * voice before it ever sounded, and the note would vanish.
+     * Read as loudest until measured. */
+    voice[pick].env = 1 << 30;
     voice[pick].target = 1;
     voice[pick].rel = 0;
+    return 1;
+}
+
+static void piano_on(uint8_t note, uint8_t vel) {
+    (void)piano_on_p(note, vel, cur_preset, VOICE_LIVE);
+}
+
+/* release one voice's note: the voice of this pitch in this class. */
+static void voice_release(uint32_t v) {
+    const patch_t *P = &PATCHES[voice[v].patch];
+    uint8_t o;
+    voice[v].rel = 1;
+    for (o = 0; o < 6; o++) {
+        const fmop_t *p = &P->op[o];
+        fm_op_t *op = &voice[v].op[o];
+        if (op->seg < 3) {
+            op->seg = 3;
+            op->tgt = (int32_t)GAIN_T[gain_idx((uint32_t)op->ol + p->l[3])] << 16;
+            op->sh = eg_shift(rate_eff(p->r[3], op->rsadj));
+        }
+    }
 }
 
 static void piano_off(uint8_t note) {
     uint32_t v;
-    uint8_t o;
-    for (v = 0; v < NV; v++) {
-        const patch_t *P;
-        if (voice[v].note != note) continue;
-        P = &PATCHES[voice[v].patch];
-        voice[v].rel = 1;
-        for (o = 0; o < 6; o++) {
-            const fmop_t *p = &P->op[o];
-            fm_op_t *op = &voice[v].op[o];
-            if (op->seg < 3) {
-                op->seg = 3;
-                op->tgt = (int32_t)GAIN_T[gain_idx((uint32_t)op->ol + p->l[3])] << 16;
-                op->sh = eg_shift(rate_eff(p->r[3], op->rsadj));
-            }
-        }
-    }
+    for (v = 0; v < NV; v++)
+        if (voice[v].note == note) voice_release(v);
+}
+
+/* release the note of one class only (a backing part's note-off
+ * must not end a live note of the same pitch, or vice versa). */
+static void piano_off_p(uint8_t note, uint8_t cls) {
+    uint32_t v;
+    for (v = 0; v < NV; v++)
+        if (voice[v].note == note && voice[v].cls == cls) voice_release(v);
 }
 
 static void app_audio(int32_t *out, uint32_t n) {

@@ -36,7 +36,7 @@ void mset_load(settings_t *s) {
     *s = tmp;
     if (s->speed_idx > 4u) s->speed_idx = 2;
     if (s->level > 5u) s->level = 2;
-    if (s->sel > 6u) s->sel = 0;
+    if (s->sel > 7u) s->sel = 0;   /* the book: 6 pieces + Free Play + the song (v0.26) */
 }
 
 void mset_save(settings_t *s) {

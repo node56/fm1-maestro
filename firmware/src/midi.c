@@ -138,12 +138,15 @@ static int midi_parse_track(const uint8_t *p, uint32_t len, uint16_t ppq, mev_t 
             d1 = p[pos++];
             if (ndata == 2u) d2 = p[pos++];
             if (hi == MIDI_NOTE_ON || hi == MIDI_NOTE_OFF) {
+                uint8_t ch = (uint8_t)(st & 0x0Fu);
+                uint8_t on = (hi == MIDI_NOTE_ON && d2 != 0);
                 if (*n >= cap) return -1;
-                /* Note On velocity 0 is a Note Off. */
+                /* Note On velocity 0 is a Note Off. The channel is
+                 * kept: in a song, a note's part is its channel. */
                 ev[*n].delta = delta;
-                ev[*n].status = (hi == MIDI_NOTE_ON && d2 != 0) ? MIDI_NOTE_ON : MIDI_NOTE_OFF;
+                ev[*n].status = on ? (uint8_t)(MIDI_NOTE_ON | ch) : (uint8_t)(MIDI_NOTE_OFF | ch);
                 ev[*n].d1 = (uint8_t)(d1 & 0x7Fu);
-                ev[*n].d2 = (ev[*n].status == MIDI_NOTE_ON) ? (uint8_t)(d2 & 0x7Fu) : 0;
+                ev[*n].d2 = on ? (uint8_t)(d2 & 0x7Fu) : 0;
                 (*n)++;
             }
             /* any other channel message carries no take data. */
@@ -215,7 +218,7 @@ int midi_write(const mev_t *ev, uint16_t n, uint8_t *buf, uint32_t cap, uint32_t
             } else if (e->status == MIDI_META && e->d1 == MIDI_META_EOT) {
                 if (pos + 3u > cap) return -1;
                 buf[pos++] = MIDI_META; buf[pos++] = MIDI_META_EOT; buf[pos++] = 0;
-            } else if (e->status == MIDI_NOTE_ON || e->status == MIDI_NOTE_OFF) {
+            } else if ((e->status & 0xF0u) == MIDI_NOTE_ON || (e->status & 0xF0u) == MIDI_NOTE_OFF) {
                 if (pos + 3u > cap) return -1;
                 buf[pos++] = e->status; buf[pos++] = e->d1; buf[pos++] = e->d2;
             } else {

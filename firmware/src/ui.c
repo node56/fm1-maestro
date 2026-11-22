@@ -8,14 +8,17 @@
 #define INK UI_INK
 #define CURSOR_C 0xFCE0u /* amber */
 #define BLUE UI_BLUE      /* suggested notes */
+#define AMBER UI_AMBER    /* suggested notes a take missed (replay) */
 
 #define PLANE_W 30u      /* bytes per row */
 static uint8_t blk_pfb[SCROLL_H * PLANE_W];  /* black: staff, clef, bars, your notes */
 static uint8_t blu_pfb[SCROLL_H * PLANE_W];  /* blue: suggested notes */
+static uint8_t amb_pfb[SCROLL_H * PLANE_W];  /* amber: missed notes (replay only) */
 static uint8_t *cur_fb = blk_pfb;            /* drawing target plane */
 
 void ui_plane_black(void) { cur_fb = blk_pfb; }
 void ui_plane_blue(void) { cur_fb = blu_pfb; }
+void ui_plane_amber(void) { cur_fb = amb_pfb; }
 
 static uint16_t strip[240 * 12];             /* blit staging, 12 rows */
 
@@ -42,7 +45,7 @@ static void vline(uint32_t x, uint32_t y0, uint32_t y1) {
 void ui_clear(void) {
     uint32_t i;
     for (i = 0; i < (uint32_t)SCROLL_H * PLANE_W; i++)
-        blk_pfb[i] = blu_pfb[i] = 0;
+        blk_pfb[i] = blu_pfb[i] = amb_pfb[i] = 0;
 }
 
 void ui_staff_cols(uint32_t x0, uint32_t x1) {
@@ -208,16 +211,17 @@ void ui_accidental(int32_t x, uint32_t y, uint32_t kind) {
     glyph_blit(x, y >= off ? y - off : 0u, g, w, h, bpr);
 }
 
-/* composite one region row: blue (suggested) > black (staff, your notes) > paper */
+/* composite one region row: amber (missed, replay) > blue (suggested) > black (staff, your notes) > paper */
 static void expand_row(uint32_t y, uint16_t *dst) {
     uint32_t i, x;
     uint8_t *rb = blk_pfb + y * PLANE_W;
     uint8_t *ru = blu_pfb + y * PLANE_W;
+    uint8_t *ra = amb_pfb + y * PLANE_W;
     for (i = 0; i < PLANE_W; i++) {
-        uint8_t bb = rb[i], bu = ru[i];
+        uint8_t bb = rb[i], bu = ru[i], ba = ra[i];
         for (x = 0; x < 8u; x++) {
             uint8_t m = (uint8_t)(0x80u >> x);
-            uint16_t v = (bu & m) ? BLUE : (bb & m) ? INK : PAPER;
+            uint16_t v = (ba & m) ? AMBER : (bu & m) ? BLUE : (bb & m) ? INK : PAPER;
             dst[i * 8u + x] = (uint16_t)((v >> 8) | (v << 8));
         }
     }
