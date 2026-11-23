@@ -1,0 +1,11 @@
+title:    Fixture Melody
+kind:     melody
+source:   lessons2c test fixture
+level:    1
+hand:     right
+position: C5
+tempo:    90
+time:     4/4
+notes:
+C5 q | E5 q | G5 q | E5 q |
+F5 q | E5 q | D5 h |

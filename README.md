@@ -49,7 +49,7 @@ firmware/src/maestro.c      ◀── platform.c ────┤ (Dinghy templat
 | `firmware/src/grade.{h,c}` | Pitch/timing grading, integer math (pure C, host-testable) |
 | `firmware/src/ui.{h,c}` | Screen wrappers; bind to platform calls per Dinghy `docs/API.md` |
 | `firmware/src/store.h` | Progress persistence via the platform's `blob_*` storage |
-| `tools/lessons2c.py` | Converts `lessons/*.lesson` → `lessons_data.c` |
+| `tools/lessons2c.py` | Converts the book (`lessons/*.lesson`, `*.mid`, the optional `*.song`) → `lessons_data.c`, validating it against the firmware's limits |
 | `web/simulator.html` | Browser simulator: the lesson UI, 27 keys, real lessons — no hardware needed |
 | `web-installer/` | One-click installer page stub (hub pattern) |
 | `docs/` | Lesson design, content plan, UI mock, SMK-37 port, hub submission |

@@ -1,0 +1,10 @@
+title:    Dup B
+kind:     melody
+source:   lessons2c test fixture
+level:    0
+hand:     right
+position: C5
+tempo:    90
+time:     4/4
+notes:
+D5 q | D5 q | D5 q | D5 q |

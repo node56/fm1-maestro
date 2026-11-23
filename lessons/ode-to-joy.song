@@ -1,0 +1,9 @@
+# The book's multi-part song (v0.26): the Ode to Joy lesson is the
+# melody; the other parts are generated at build time from the
+# chart by tools/lessons2c.py (see format.md, "Songs"). Parts are
+# listed in learning order. The firmware only plays what it is
+# given; nothing is generated at runtime.
+title:    Ode to Joy
+melody:   l02-ode-to-joy.lesson
+chart:    C | G | F | C
+parts:    percussion bass harmony melody

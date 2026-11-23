@@ -38,6 +38,14 @@ predates v0.27.)
 python3 tools/lessons2c.py lessons/ -o firmware/src/lessons_data.c
 ```
 
+The compiler reads the book directory — the `.lesson` / `.mid`
+lessons plus the optional single `.song` (the multi-part song;
+absent, the book gets the empty song) — validates it against the
+firmware's limits, and emits the C. The formats and the checks are
+documented in `lessons/format.md`; the compiler has its own test
+suite (`tests/lessons2c_test.py`, fixtures in
+`tests/fixtures/lessons2c/`), run by the regression below.
+
 ## Build
 
 In the template checkout, with the overlay applied:
@@ -77,6 +85,12 @@ then runs, in order:
   settings blob, for cold boots from a persisted selection) and
   the exact-duty mock of `fm1_led_play_set` (film-log fields
   11–14);
+- `tests/lessons2c_test.py` — the compiler suite: fixture books
+  (`tests/fixtures/lessons2c/`) for the valid song book, the
+  song-less book, every validation failure and the off-staff
+  warning, plus a host build of the song-less book walked through
+  every entry. It runs from the repo (the runner points it at the
+  build tree for the host part);
 - `tests/v032_verify.py` — the cold-path matrix: every book entry
   (0–5 lessons + drill, 6 Free Play, 7 the song, plus an
   out-of-range persisted value) booted cold from a persisted

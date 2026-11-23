@@ -12,8 +12,11 @@ The repo is the source of truth for the tests. This runner:
   2. builds the host binary and the MIDI unit test in the build
      tree;
   3. runs, in order: tests/test_core (the template-free unit
-     tests), verify_cleanup, and v022..v032 (v032 is the cold-path
-     matrix: every book entry booted from a persisted selection);
+     tests), verify_cleanup, the lessons2c compiler suite (run
+     from the repo: it tests tools/lessons2c.py against its
+     fixtures, plus a host build of a song-less book), and
+     v022..v032 (v032 is the cold-path matrix: every book entry
+     booted from a persisted selection);
   4. prints a per-suite summary and exits non-zero on any failure.
 
 The build tree is the Dinghy template checkout (SETUP.md):
@@ -96,11 +99,14 @@ def build():
 
 def main():
     filters = sys.argv[1:]
+    os.environ["MAESTRO_BUILD_TREE"] = BT   # suites (lessons2c) read it
     sync()
     build()
     suites = [("test_core", [os.path.join(BT, "build/host/test_core")])]
     suites.append(("verify_cleanup",
                    ["python3", os.path.join(BT, "tests/verify_cleanup.py")]))
+    suites.append(("lessons2c",
+                   [sys.executable, os.path.join(REPO, "tests/lessons2c_test.py")]))
     for n in range(22, 33):
         name = f"v{n:03d}"
         suites.append((name, ["python3", os.path.join(BT, "tests",

@@ -45,6 +45,13 @@ one version's behaviour; run them via the runner, not by hand.
   `fm1_led_play_set` (film-log fields 11–14).
 - `tests/midi_test.c` is the unit test for `firmware/src/midi.c`
   (built and run as part of `v025_verify.py`'s checks).
+- `tests/lessons2c_test.py` is the compiler suite for
+  `tools/lessons2c.py`: fixture books under
+  `tests/fixtures/lessons2c/` (a valid song book, a song-less
+  book, one fixture per validation failure, the off-staff
+  warning), plus a host build of the song-less book walked
+  through every book entry. The runner runs it from the repo,
+  after `verify_cleanup.py`.
 - `tests/v032_verify.py` is the cold-path matrix: every book
   entry booted from a persisted selection, first gesture checked.
 - `tests/run_host.sh` (from the template) compiles the same
