@@ -19,7 +19,8 @@ and ledger intrusions only ever ADD pixels, so presence is the
 discriminating direction), with a bounded excess where the box is
 known to be clean.
 
-  A  the drill, seeded boot (sel 5): the parked C# wears the
+  A  the drill, seeded boot (sel 6 in the v0.30 order): the
+     parked C# wears the
      sharp in blue; the white-key D beside it wears nothing; the
      film log's bright key at the park is the C# key (8) -- the
      sheet and the light say the same thing; pressing C# kicks
@@ -154,7 +155,7 @@ build()
 
 # ---------------------------------------------------------------- A: the drill
 # seeded boot at the drill; the boot drill is seed 7: C# D C# D D D# ...
-out = run("100 T\n500 shot\n1500 end\n", "v033_drill_park", seed=5)
+out = run("100 T\n500 shot\n1500 end\n", "v033_drill_park", seed=6)
 blue, _, _ = masks(out + "-500.ppm")
 m, e = glyph_at(blue, 60, 186)
 check("A drill park: the C# first note wears the sharp (blue)",
@@ -165,11 +166,11 @@ check("A drill park: the white-key D wears no accidental",
       int(box.sum()) == 0, f"{int(box.sum())} blue px in the D's box")
 
 out = run("100 T\n500 shot\n1000 keys 0x100\n1300 keys 0\n"
-          "2500 shot\n3200 end\n", "v033_drill_kick", seed=5)
+          "2500 shot\n3200 end\n", "v033_drill_kick", seed=6)
 check("A drill: pressing the C# the sheet shows kicks off",
       scroll_hash(out + "-500.ppm") != scroll_hash(out + "-2500.ppm"))
 
-out = run("1500 end\n", "v033_drill_film", seed=5, film=60)
+out = run("1500 end\n", "v033_drill_film", seed=6, film=60)
 row = None
 for line in open(out + "-log.txt"):
     p = line.split()
@@ -231,8 +232,10 @@ if r.returncode == 0:
             with open(sp, "w") as f:
                 f.write(script)
             o = os.path.join(TMP, name)
+            env = dict(os.environ)
+            env["DINGHY_SEED_SEL"] = "1"
             rr = subprocess.run([fbin, o, sp], cwd=TMP,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, env=env)
             if rr.returncode != 0:
                 check(f"B run {name}", False, rr.stderr[-300:])
             return o
@@ -263,7 +266,7 @@ def free_take(keys, name):
     return run("100 T\n500 btn 12\n2500 btn 13\n"
                f"3000 keys {keys}\n3400 keys 0\n"
                "4000 btn 12\n4500 btn 8\n5200 shot\n6000 end\n",
-               name, seed=6)
+               name, seed=7)
 
 out = free_take("0x100", "v033_take_sharp")
 _, _, ink = masks(out + "-5200.ppm")
@@ -280,7 +283,7 @@ check("C free play: the recorded C natural wears no sharp",
 
 # ---------------------------------------------------------------- D: misses in amber
 out = run("100 T\n1000 keys 0x100\n1300 keys 0\n"
-          "12500 shot\n14000 end\n", "v033_replay", seed=5)
+          "12500 shot\n14000 end\n", "v033_replay", seed=6)
 _, amber, _ = masks(out + "-12500.ppm")
 m, nx = find_glyph(amber, 186, 60, 110)
 check("D replay: the missed C# (eighth) draws its sharp in amber",

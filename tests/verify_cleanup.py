@@ -23,6 +23,12 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# v0.30: the book opens on the song; this suite's scripts were
+# written against a boot on the first lesson, so seed the
+# persisted selection at that lesson's new slot (1). Every script
+# navigation below is relative from there and lands as before
+# (e.g. "enc 0 6" from slot 1 still reaches Free Play, slot 7).
+os.environ["DINGHY_SEED_SEL"] = "1"
 HOST = os.path.join(ROOT, "build/host/dinghy")
 OUT = os.path.join(ROOT, "build/host")
 SCRIPTS = os.path.join(ROOT, "tests/scripts")

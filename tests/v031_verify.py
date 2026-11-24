@@ -32,10 +32,13 @@ Semantics asserted here:
   octave shift               the target pitch lights the key that
                              sounds it under the current shift
 
-Piece 0 = First Five Notes (72 BPM, 38.4 px/s): 13 notes at
-piece-x 80,112,...,464 (C5 D5 E5 F5 G5 F5 E5 D5 C5 D5 E5 D5 C5),
-end bar 576. Key of MIDI m (no shift) is m-53: C5=7, D5=9, E5=11,
-F5=12, G5=14.
+The lesson sections run on First Five Notes (72 BPM, 38.4 px/s):
+13 notes at piece-x 80,112,...,464 (C5 D5 E5 F5 G5 F5 E5 D5 C5
+D5 E5 D5 C5), end bar 576. Key of MIDI m (no shift) is m-53:
+C5=7, D5=9, E5=11, F5=12, G5=14. In the v0.30 book order that
+lesson is slot 1 (the song is slot 0), so the suite seeds the
+persisted selection at 1 for its unseeded runs; the song and
+Free Play sections seed their own slots (0 and 7).
 
 Usage: python3 tests/v031_verify.py   (from the build tree root)
 """
@@ -45,6 +48,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ["DINGHY_SEED_SEL"] = "1"   # First Five Notes (see docstring)
 HOST = os.path.join(ROOT, "build/host/dinghy")
 OUT = os.path.join(ROOT, "build/host")
 SCRIPTS = os.path.join(ROOT, "tests/scripts")
@@ -204,7 +208,7 @@ if r.returncode == 0:
 
 # ---------------------------------------------------------------- E: the song's percussion part
 rows = run("v031_song", "300 keys 0x80\n900 keys 0\n5000 end\n",
-           {"DINGHY_SEED_SEL": "7"})
+           {"DINGHY_SEED_SEL": "0"})
 r = at(rows, 200)
 check("E song: parked on the percussion part, the drum-pad key (7) is the target",
       r is not None and r[1] == KC and r[3] == 255 and r[4] == 0, r)
@@ -213,7 +217,7 @@ check("E song: kicked and rolling, PLAY red and the target stays the drum pad (e
       and exists(rows, 400, 2000, lambda r: r[1] == KC))
 
 # ---------------------------------------------------------------- F: Free Play -- no guide, no target
-rows = run("v031_free", "300 btn 12\n3000 end\n", {"DINGHY_SEED_SEL": "6"})
+rows = run("v031_free", "300 btn 12\n3000 end\n", {"DINGHY_SEED_SEL": "7"})
 r = at(rows, 200)
 check("F free: parked, no key bright, all keys glow, PLAY green",
       r is not None and r[1] == 0 and r[5] == ALLKEYS and r[3] == 255 and r[4] == 0, r)

@@ -221,15 +221,39 @@
  * the natural. All content voices sharps, never flats (the
  * drill and the .lesson/.mid pipeline produce sharps by
  * construction), so the sign is always the sharp glyph.
+ *
+ * v0.30: the song is the front door, and the assembly is four
+ * real parts. The book is reordered -- the song is slot 0, the
+ * pieces follow (PIECE_BASE), Free Play is last -- so a fresh
+ * boot lands on the song's first part instead of burying the
+ * song behind every lesson. NBOOK is still 8 and every
+ * persisted selection an older build could write is still a
+ * valid slot, so old saves boot safely (onto a different sheet
+ * than they meant, never a hole). The song's title carries its
+ * "(Song)" suffix in its data (lessons/ode-to-joy.song), so its
+ * sheets no longer read exactly like the Ode to Joy lesson's.
+ * The harmony part is generated now (lessons2c.py: chord tones
+ * cycling root-3rd-5th-3rd, written around middle C) and sounds
+ * through a fixed PIANO 1 (route_event), leaving the PRESETS
+ * knob to the melody alone. The drum gains a pitch drop so its
+ * attack can be heard through the small speaker (fm_piano.c).
  */
 
 #include "fm_piano.c"   /* DX7 FM piano presets (E.PIANO 4 default) -- v0.19 */
 #include "midi.c"   /* Standard MIDI File events: the take -- v0.22 */
 
 /* ---- pieces: the book ---- */
+/* The book's order (v0.30): the song first, then the pieces,
+ * then Free Play last. The song is the front door -- a fresh
+ * boot (sel 0) lands on its first part. NBOOK is unchanged at
+ * 8, and every value an older build could have persisted
+ * (0..7) is still a valid slot in this order, so a saved
+ * selection boots safely -- onto a different sheet than the
+ * old build meant, never onto a hole. */
 #define NPIECES 6u
-#define FREE_IDX 6u
-#define SONG_IDX 7u
+#define SONG_IDX 0u
+#define PIECE_BASE 1u   /* the pieces occupy slots PIECE_BASE..PIECE_BASE+NPIECES-1 */
+#define FREE_IDX (PIECE_BASE + NPIECES)   /* 7 */
 #define NBOOK (NPIECES + 2u)   /* the pieces + Free Play + the song */
 static const lesson_t *pieces[NPIECES];  /* 0..4 lessons, 5 = generated drill */
 static lesson_t drill_lesson;
@@ -490,8 +514,8 @@ static uint32_t sheet_end_x[NBOOK];
 /* ---- the multi-part song (v0.26) ----
  * The song (book entry SONG_IDX) is one sheet whose take holds
  * every part at once, told apart by MIDI channel: melody 0,
- * bass 1, harmony 2 (reserved -- no events in v0.26), percussion
- * 9 (the GM drum channel). song_lesson is the current part's
+ * bass 1, harmony 2 (a real generated part since v0.30),
+ * percussion 9 (the GM drum channel). song_lesson is the current part's
  * guide, filled in by load_song_part() so the layout, the judge
  * and the kick-off see an ordinary lesson. All song state is
  * session-only, like the rest of the practice loop. */
@@ -753,14 +777,17 @@ static uint8_t midi_held(uint8_t midi) {
  * the bass is a transposing instrument (written at a readable
  * octave, sounding an octave below, like a double bass), the
  * percussion channel sounds at one fixed low pitch (a drum hit
- * is a drum hit, whichever pad key wrote it), and the melody --
- * and the reserved harmony -- stay piano. An event's voice class
- * is LIVE when its channel is the part in your hands, BACKING
- * when it is a completed part playing along. */
+ * is a drum hit, whichever pad key wrote it), the harmony has a
+ * fixed patch of its own from the piano family (v0.30: PIANO 1,
+ * so it reads as a second piano, not as the melody's voice),
+ * and the melody is the PRESETS knob's patch. An event's voice
+ * class is LIVE when its channel is the part in your hands,
+ * BACKING when it is a completed part playing along. */
 static void route_event(uint8_t ch, uint8_t pitch, uint8_t *patch, uint8_t *tpitch) {
     if (on_song()) {
         if (ch == CH_BASS) { *patch = PATCH_BASS; *tpitch = pitch > 12u ? (uint8_t)(pitch - 12u) : pitch; return; }
         if (ch == CH_PERC) { *patch = PATCH_DRUM; *tpitch = DRUM_PITCH; return; }
+        if (ch == CH_HARMONY) { *patch = PATCH_HARMONY; *tpitch = pitch; return; }
     }
     *patch = piano_preset_get();
     *tpitch = pitch;
@@ -1125,7 +1152,7 @@ static void setup_piece(void) {
         pl = &song_lesson;
         layout_piece(pl);
     } else {
-        pl = pieces[sel];
+        pl = pieces[sel - PIECE_BASE];
         layout_piece(pl);
     }
 }
@@ -1429,11 +1456,11 @@ static uint32_t target_keys(void) {
 static void load_after_take(uint8_t terrible) {
     uint8_t next = sel;
     if (!terrible) {
-        do { next = (uint8_t)(next + 1u); if (next >= NPIECES) next = 0; } while (!pieces[next]);
+        do { next = (uint8_t)(next + 1u); if (next >= FREE_IDX) next = PIECE_BASE; } while (!pieces[next - PIECE_BASE]);
     }
     if (next != sel) {
         sheet_tempo[sel] = tempo;   /* the old sheet keeps its tempo */
-        if (next == (uint8_t)(NPIECES - 1u)) { drill_seed++; regen_drill(); }
+        if (next == (uint8_t)(FREE_IDX - 1u)) { drill_seed++; regen_drill(); }
         sel = next;
         set.sel = sel;   /* the selection persists, as with SELECT */
         set_dirty = 1;
@@ -1911,13 +1938,13 @@ static void app_main(void) {
          * free-play tempo; the book never has a hole in practice. */
         if (i == FREE_IDX) sheet_tempo[i] = FREE_TEMPO;
         else if (i == SONG_IDX) sheet_tempo[i] = ode_song.tempo;
-        else sheet_tempo[i] = pieces[i] ? pieces[i]->tempo : FREE_TEMPO;
+        else sheet_tempo[i] = pieces[i - PIECE_BASE] ? pieces[i - PIECE_BASE]->tempo : FREE_TEMPO;
         sheet_end_set[i] = 0;
         sheet_end_x[i] = 0;
     }
     mset_load(&set);
     sel = set.sel;   /* the saved book selection (clamped by the load) */
-    if (sel >= NBOOK || (sel < NPIECES && !pieces[sel])) sel = 0;
+    if (sel >= NBOOK || (sel >= PIECE_BASE && sel < FREE_IDX && !pieces[sel - PIECE_BASE])) sel = 0;
     select_piece();
 
     /* Power on in the state the PLAY+HOME "reset" ritual used to
@@ -1956,7 +1983,7 @@ static void app_main(void) {
             for (;;) {
                 while (s < 0) s += NBOOK;
                 s %= NBOOK;
-                if (s >= (int32_t)NPIECES || pieces[s]) break;
+                if (s == (int32_t)SONG_IDX || s == (int32_t)FREE_IDX || pieces[s - PIECE_BASE]) break;
                 s += dir;
             }
             if ((uint8_t)s != sel) {

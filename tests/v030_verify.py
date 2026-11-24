@@ -134,10 +134,11 @@ def play_duties(out, t0, t1):
 build()
 
 # ---------- cold: boot with a persisted selection, press the first note ----------
-COLD = [(0, 0x80, "L01 First Five Notes"), (1, 0x800, "L02 Ode to Joy"),
-        (2, 0x80, "L03 Twinkle"), (3, 0x800, "L04 Lightly Row"),
-        (4, 0x80, "L05 Aura Lee"), (5, 0x100, "drill"),
-        (7, 0x80, "song (percussion part)")]
+# (v0.30 book order: 0 = the song, 1..5 the lessons, 6 the drill)
+COLD = [(0, 0x80, "song (percussion part)"),
+        (1, 0x80, "L01 First Five Notes"), (2, 0x800, "L02 Ode to Joy"),
+        (3, 0x80, "L03 Twinkle"), (4, 0x800, "L04 Lightly Row"),
+        (5, 0x80, "L05 Aura Lee"), (6, 0x100, "drill")]
 for sel, mask, name in COLD:
     ev = [(500, "shot"), (1000, f"keys {mask:#x}"), (1300, "keys 0"),
           (2200, "shot"), (3700, "shot")]
@@ -155,47 +156,51 @@ for sel, mask, name in COLD:
 run(write_script("v030_cold200.txt",
                  [(500, "shot"), (1000, "keys 0x80"), (1300, "keys 0"),
                   (2200, "shot"), (3700, "shot")], 4200), "v030c200", seed=200)
-check("cold boot sel=200 (clamped to piece 0): first-note press kicks off",
+check("cold boot sel=200 (clamped to slot 0, the song): first-note press kicks off",
       rolls("v030c200", 500, 2200, 3700))
 
-# ---------- Free Play cold (sel 6): no kick-off exists there by design ----------
+# ---------- Free Play cold (sel 7): no kick-off exists there by design ----------
 ev = [(500, "shot"), (1000, "keys 0x80"), (1300, "keys 0"), (2200, "shot"), (3700, "shot")]
-run(write_script("v030_free_a.txt", ev, 4200), "v030fa", seed=6)
+run(write_script("v030_free_a.txt", ev, 4200), "v030fa", seed=7)
 check("cold Free Play: a stopped press with REC off is a ghost (no roll)",
       still("v030fa", [500, 2200, 3700]))
 ev = [(500, "shot"), (700, "btn 13"), (1200, "keys 0x80"), (1500, "keys 0"),
       (2200, "shot"), (3700, "shot")]
-run(write_script("v030_free_b.txt", ev, 4200), "v030fb", seed=6)
+run(write_script("v030_free_b.txt", ev, 4200), "v030fb", seed=7)
 check("cold Free Play: REC arm + press auto-starts the tape",
       rolls("v030fb", 500, 2200, 3700))
 
 # ---------- controls: SELECT into the piece, then press (the old suites' path) ----------
-ev = [(300, "enc 0 -1"), (600, "shot"), (1000, "keys 0x80"), (1300, "keys 0"),
+# (the boot already lands on the song in the v0.30 order, so the
+# control SELECTs away to L01 and back -- the park it returns to
+# must be the seeded boot's park.)
+ev = [(300, "enc 0 1"), (450, "enc 0 -1"), (600, "shot"), (1000, "keys 0x80"), (1300, "keys 0"),
       (2200, "shot"), (3700, "shot")]
 run(write_script("v030_ctl_song.txt", ev, 4200), "v030ts")
 check("control: SELECT into the song, first-note press kicks off",
       rolls("v030ts", 600, 2200, 3700))
 check("control: seeded song park is pixel-identical to the SELECT park",
-      scroll_hash(shot("v030ts", 600)) == scroll_hash(shot("v030c7", 500)))
-ev = [(300, "enc 0 5"), (600, "shot"), (1000, "keys 0x100"), (1300, "keys 0"),
+      scroll_hash(shot("v030ts", 600)) == scroll_hash(shot("v030c0", 500)))
+ev = [(300, "enc 0 6"), (600, "shot"), (1000, "keys 0x100"), (1300, "keys 0"),
       (2200, "shot"), (3700, "shot")]
 run(write_script("v030_ctl_drill.txt", ev, 4200), "v030td")
 check("control: SELECT to the drill, first-note press kicks off",
       rolls("v030td", 600, 2200, 3700))
 
 # ---------- the PLAY colour at a seeded park (task d) ----------
-run(write_script("v030_led.txt", [(1400, "shot")], 1600), "v030led", seed=7, film=20)
+run(write_script("v030_led.txt", [(1400, "shot")], 1600), "v030led", seed=0, film=20)
 duties = play_duties("v030led", 200, 1400)
 check("seeded song park: PLAY green (stopped and ready: a press will kick off) (v0.27 colour; was LED solid on)",
       len(duties) > 10 and all(d == (255, 0) for d in duties), f"duties={duties[:8]}")
 
-# ---------- park perturbations (piece 0 unless noted; mask 0x80 = its first note) ----------
+# ---------- park perturbations (seeded at L01, slot 1 in the v0.30
+# order, unless noted; mask 0x80 = its first note) ----------
 # E1: a brief PLAY roll (300 ms, ~11 px) stopped just past the park.
 ev = [(400, "shot"), (500, "btn 12"), (800, "btn 12"),
       (1500, "keys 0x80"), (1800, "keys 0"), (2000, "shot"), (2600, "shot"),
       (3200, "btn 8"), (3800, "keys 0x80"), (4100, "keys 0"),
       (4400, "shot"), (5600, "shot")]
-run(write_script("v030_e1.txt", ev, 6000), "v030e1")
+run(write_script("v030_e1.txt", ev, 6000), "v030e1", seed=1)
 check("E1: the dead press still sounds (ghost) after a brief PLAY roll",
       wav_rms("v030e1", 1.5, 1.8) > 150, f"rms={wav_rms('v030e1', 1.5, 1.8):.0f}")
 check("E1: press a few px past the park kicks off (tap-overshoot forgiven)",
@@ -209,7 +214,7 @@ ev = [(400, "shot"), (500, "enc 4 1"), (1100, "keys 0x80"), (1400, "keys 0"),
       (1700, "shot"), (2300, "shot"),
       (2600, "btn 8"), (2900, "enc 4 1"), (3100, "enc 4 -1"),
       (3400, "keys 0x80"), (3700, "keys 0"), (4000, "shot"), (5200, "shot")]
-run(write_script("v030_e2.txt", ev, 5600), "v030e2")
+run(write_script("v030_e2.txt", ev, 5600), "v030e2", seed=1)
 check("E2: press one scrub detent past the park kicks off",
       not still("v030e2", [1700, 2300]))
 check("E2: out-and-back detents return to the exact park; the press kicks off",
@@ -219,7 +224,7 @@ check("E2: out-and-back detents return to the exact park; the press kicks off",
 # before the first note: a first-note press there can only mean "start".
 ev = [(400, "shot"), (500, "enc 5 -1"), (1100, "keys 0x80"), (1400, "keys 0"),
       (1700, "shot"), (2900, "shot")]
-run(write_script("v030_e6.txt", ev, 3300), "v030e6")
+run(write_script("v030_e6.txt", ev, 3300), "v030e6", seed=1)
 check("E6: press at the sheet start (before the first note) kicks off",
       not still("v030e6", [1700, 2900]))
 
@@ -228,7 +233,7 @@ ev = [(400, "shot"), (400, "btn 1"), (1000, "keys 0x80"), (1300, "keys 0"),
       (1600, "shot"), (2200, "shot"),
       (2500, "btn 0"), (3100, "keys 0x80"), (3400, "keys 0"),
       (3700, "shot"), (4900, "shot")]
-run(write_script("v030_e3.txt", ev, 5300), "v030e3")
+run(write_script("v030_e3.txt", ev, 5300), "v030e3", seed=1)
 check("E3: with OCT+ on, the same key sounds (ghost sounds an octave up)",
       wav_rms("v030e3", 1.0, 1.3) > 150, f"rms={wav_rms('v030e3', 1.0, 1.3):.0f}")
 check("E3: with OCT+ on, the press does NOT kick off (wrong pitch)",
@@ -240,7 +245,7 @@ check("E3: with the octave back to 0, the press kicks off",
 for dur in (1, 10, 50):
     ev = [(500, "shot"), (1000, "keys 0x80"), (1000 + dur, "keys 0"),
           (2200, "shot"), (3400, "shot")]
-    run(write_script(f"v030_tap{dur}.txt", ev, 3800), f"v030t{dur}")
+    run(write_script(f"v030_tap{dur}.txt", ev, 3800), f"v030t{dur}", seed=1)
     check(f"E4: a {dur} ms tap at the park kicks off",
           rolls(f"v030t{dur}", 500, 2200, 3400))
 
@@ -251,7 +256,7 @@ ev = [(400, "shot"), (500, "btn 12"), (900, "btn 8"), (1500, "btn 12"),
       (2100, "btn 12"), (2400, "shot"), (2600, "keys 0x80"), (2900, "keys 0"),
       (3200, "shot"), (3600, "btn 8"), (4200, "keys 0x80"), (4500, "keys 0"),
       (4800, "shot"), (6000, "shot")]
-run(write_script("v030_e5.txt", ev, 6400), "v030e5", seed=7)
+run(write_script("v030_e5.txt", ev, 6400), "v030e5", seed=0)
 check("E5: press ~30 px past the park does not kick off (a real roll, not a tap)",
       still("v030e5", [2400, 3200]))
 check("E5: HOME rewind revives the kick-off",

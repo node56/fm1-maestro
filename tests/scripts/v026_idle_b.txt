@@ -1,7 +1,7 @@
 # v026 idle B: a free-play take with a jump loops forever; the screen
 # blanks at 1100 + 120000 ms while the tape keeps playing (audio must
 # continue past the blank), and a knob wakes it.
-100 enc 0 6
+100 enc 0 7
 200 btn 12
 300 btn 13
 400 keys 0x80

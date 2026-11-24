@@ -7,15 +7,21 @@ DINGHY_SEED_SEL hook in tests/host.c pre-seeds the settings blob a
 previous run would have saved) and performs its designed first
 gesture:
 
-  sel 0..5, 7   guided entries (lessons, drill, the song): parked at
-                the first note, PLAY green -- the light's promise
-                that a press will start a take -- and the first-note
-                press kicks off (the tape rolls).
-  sel 6         Free Play has no kick-off by design: a stopped press
+  sel 0..6      guided entries (the song, the lessons, the drill):
+                parked at the first note, PLAY green -- the light's
+                promise that a press will start a take -- and the
+                first-note press kicks off (the tape rolls). The
+                book order is v0.30's: sel 0 is the song (its
+                percussion part), 1..5 the lessons, 6 the drill.
+  sel 7         Free Play has no kick-off by design: a stopped press
                 with REC off is a ghost (nothing rolls); with REC
                 armed the same press auto-starts the tape.
   sel 200       an out-of-range persisted byte is clamped at load
-                (to piece 0) and kicks off like piece 0.
+                (to slot 0, the song) and kicks off like slot 0.
+  unseeded      a fresh boot -- no persisted selection at all --
+                lands on the song's percussion part: the same park
+                as the seeded sel=0 boot, PLAY green, and the
+                target light on the drum-pad key.
 
 Why a separate suite when v030 grew cold-boot checks as the Nov 22
 kick-off bug's repro: v030's cold section is entangled with that
@@ -121,11 +127,12 @@ PRESS = [(500, "shot"), (1000, "keys {mask:#x}"), (1300, "keys 0"),
          (2200, "shot"), (3700, "shot")]
 NOPRESS = [(500, "shot"), (2200, "shot"), (3700, "shot")]
 
-# (sel, first-note key mask, name) -- the guided entries
-GUIDED = [(0, 0x80, "L01 First Five Notes"), (1, 0x800, "L02 Ode to Joy"),
-          (2, 0x80, "L03 Twinkle"), (3, 0x800, "L04 Lightly Row"),
-          (4, 0x80, "L05 Aura Lee"), (5, 0x100, "drill"),
-          (7, 0x80, "song (percussion part)")]
+# (sel, first-note key mask, name) -- the guided entries, in the
+# v0.30 book order: the song first, then the lessons, then the drill
+GUIDED = [(0, 0x80, "song (percussion part)"),
+          (1, 0x80, "L01 First Five Notes"), (2, 0x800, "L02 Ode to Joy"),
+          (3, 0x80, "L03 Twinkle"), (4, 0x800, "L04 Lightly Row"),
+          (5, 0x80, "L05 Aura Lee"), (6, 0x100, "drill")]
 
 build()
 
@@ -146,23 +153,55 @@ for sel, mask, name in GUIDED:
           len(duties) > 10 and all(d == (255, 0) for d in duties),
           f"duties={duties[:8]}")
 
-# Free Play (sel 6): no kick-off by design -- a ghost with REC off,
+# Free Play (sel 7): no kick-off by design -- a ghost with REC off,
 # an auto-start with REC armed.
 ev = [(500, "shot"), (1000, "keys 0x80"), (1300, "keys 0"), (2200, "shot"), (3700, "shot")]
-run(write_script("v032_free_a.txt", ev, 4200), "v032fa", seed=6)
-check("sel=6 (Free Play): a stopped press with REC off is a ghost (no roll)",
+run(write_script("v032_free_a.txt", ev, 4200), "v032fa", seed=7)
+check("sel=7 (Free Play): a stopped press with REC off is a ghost (no roll)",
       still("v032fa", [500, 2200, 3700]))
 ev = [(500, "shot"), (700, "btn 13"), (1200, "keys 0x80"), (1500, "keys 0"),
       (2200, "shot"), (3700, "shot")]
-run(write_script("v032_free_b.txt", ev, 4200), "v032fb", seed=6)
-check("sel=6 (Free Play): REC arm + press auto-starts the tape",
+run(write_script("v032_free_b.txt", ev, 4200), "v032fb", seed=7)
+check("sel=7 (Free Play): REC arm + press auto-starts the tape",
       rolls("v032fb", 500, 2200, 3700))
 
-# Out-of-range persisted selection: clamped at load to piece 0.
+# Out-of-range persisted selection: clamped at load to slot 0
+# (the song; its percussion part's first note is the same key).
 ev = [(t, txt.format(mask=0x80) if "{mask" in txt else txt) for t, txt in PRESS]
 run(write_script("v032_cold200.txt", ev, 4200), "v032c200", seed=200)
-check("sel=200 (clamped to piece 0): first-note press kicks off",
+check("sel=200 (clamped to slot 0, the song): first-note press kicks off",
       rolls("v032c200", 500, 2200, 3700))
+
+# Unseeded boot (v0.30's front door): no persisted selection at
+# all -- the store's default sel is 0, which is now the song.
+# The boot must park on the song's percussion part, exactly as
+# the seeded sel=0 boot does, with PLAY green and the target
+# light on the drum-pad key (key 7, the middle-C key).
+ev = [(500, "shot"), (2200, "shot")]
+script = write_script("v032_boot_song.txt", ev, 2600)
+env = dict(os.environ)
+env.pop("DINGHY_SEED_SEL", None)   # a truly fresh boot
+r = subprocess.run([BIN, os.path.join(HOST, "v032boot"), os.path.join(SCR, script), "20"],
+                   cwd=ROOT, capture_output=True, text=True, env=env)
+check("unseeded boot runs", r.returncode == 0, r.stderr[-300:])
+check("unseeded boot: parked view is stable",
+      still("v032boot", [500, 2200]))
+check("unseeded boot: park == seeded sel=0 park (the song's percussion part)",
+      scroll_hash(shot("v032boot", 500)) == scroll_hash(shot("v032n0", 500)))
+duties = play_duties("v032boot", 200, 2200)
+check("unseeded boot: PLAY green at the park",
+      len(duties) > 10 and all(d == (255, 0) for d in duties),
+      f"duties={duties[:8]}")
+rows = []
+for line in open(os.path.join(HOST, "v032boot-log.txt")):
+    p = line.split()
+    if len(p) >= 15 and p[0].isdigit() and int(p[0]) <= 2000:
+        rows.append(p)
+check("unseeded boot: the target light is the drum-pad key (key 7), the rest glow",
+      bool(rows) and all(int(p[2]) == (1 << 7)
+                         and int(p[13]) == ((1 << 27) - 1) ^ (1 << 7)
+                         for p in rows),
+      f"rows={rows[:2]}")
 
 print()
 if FAILS:

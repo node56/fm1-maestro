@@ -113,13 +113,31 @@
  * playing along). A backing note may only take a free voice or
  * another backing voice; if none is available the note is
  * dropped, never stolen from the player's hands.
+ *
+ * v0.30: the DRUM gains a pitch envelope (the patch_t penv
+ * fields): a hit starts at four times its written pitch and
+ * drops exponentially to the thump (~2048-sample time
+ * constant), so the attack's first tens of milliseconds sweep
+ * through the 300 Hz-4 kHz band the FM-1's small speaker
+ * actually reproduces -- on the v0.29 patch the hit lived at
+ * ~147 Hz, under the speaker's roll-off, and was barely
+ * heard. OP2's ratio drops from x11 to x3 so the crunch sweeps
+ * inside that band instead of above it. The tail is the
+ * unchanged thump; no other patch declares an envelope.
  */
 #include "fm_tables.h"
 
 /* operator parameters.
  * mult: 0 = x1.00, 1 = x3.00, 2 = x5.00, 3 = x11.00, 4 = x14.00, 5 = x1.58. */
 typedef struct { uint8_t ol; uint8_t r[4]; uint8_t l[4]; int8_t det; uint8_t mult; uint8_t rs; uint8_t kvs; } fmop_t;
-typedef struct { const char *name; uint8_t alg; uint8_t fb; fmop_t op[6]; } patch_t;
+/* penv_from / penv_sh (v0.30): an optional pitch envelope. A
+ * voice started on a patch with penv_from != 0 begins at
+ * penv_from/256 times its written pitch (all operator ratios
+ * preserved) and glides exponentially back to unity with time
+ * constant ~2^penv_sh samples. Only the DRUM declares one; every
+ * other patch leaves the fields zero and renders exactly as
+ * before. */
+typedef struct { const char *name; uint8_t alg; uint8_t fb; fmop_t op[6]; uint16_t penv_from; uint8_t penv_sh; } patch_t;
 
 static const patch_t PATCHES[] = {
     { "E.PIANO 4", 5, 4, {
@@ -178,17 +196,33 @@ static const patch_t PATCHES[] = {
     } },
     { "DRUM", 5, 0, {
         { 99, {99, 55, 50, 80}, {99,  0,  0,  0}, 0, 0, 0, 0 },  /* OP1 carrier: the thump (sine burst, ~200 ms) */
-        { 95, {99, 75, 60, 80}, {99,  0,  0,  0}, 0, 3, 0, 0 },  /* OP2 mod -> OP1, x11.00: attack crunch, collapses fast */
+        { 95, {99, 75, 60, 80}, {99,  0,  0,  0}, 0, 1, 0, 0 },  /* OP2 mod -> OP1, x3.00: attack crunch, collapses fast (x11 until v0.30 -- see the pitch-envelope note below) */
         { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP3 silent */
         { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP4 silent */
         { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP5 silent */
         { 40, {50, 50, 50, 50}, { 0,  0,  0,  0}, 0, 0, 0, 0 },  /* OP6 silent */
-    } },
+    }, 1024, 11 },   /* pitch envelope (v0.30): starts x4.00 and drops to
+                     * the thump with a ~2048-sample time constant, so
+                     * the attack sweeps down through the band a small
+                     * speaker reproduces instead of starting below it.
+                     * OP2's ratio came down from x11 to x3 for the
+                     * same reason: at x11 the crunch sits at ~1.6 kHz
+                     * only at the written pitch, and any pitch drop
+                     * sweeps it up out of the band before it can be
+                     * heard; at x3 the whole sweep stays in the band.
+                     * Measured on host renders of a lone hit (attack
+                     * window 30 ms): 300 Hz-4 kHz RMS 2728 -> 3356,
+                     * attack total unchanged, the 100-300 ms tail
+                     * (the thump) unchanged. */
 };
 #define N_PATCHES (sizeof PATCHES / sizeof PATCHES[0])
 #define N_PIANO_PRESETS 5u   /* the PRESETS knob's patches (indices 0..4) */
 #define PATCH_BASS 5u
 #define PATCH_DRUM 6u
+#define PATCH_HARMONY 1u   /* PIANO 1: the song harmony part's fixed patch
+                            * (v0.30) -- a preset-family voice that is not
+                            * the knob's business; the knob still chooses
+                            * the melody's patch alone */
 static uint8_t cur_preset;   /* session-only; resets to 0 (E.PIANO 4) on boot */
 
 /* Dexed FmCore::algorithms[32], verbatim (ops[0]=OP6 ... ops[5]=OP1).
@@ -312,6 +346,9 @@ static struct {
     uint8_t patch;      /* the preset this voice started with */
     uint8_t cls;        /* VOICE_LIVE or VOICE_BACK */
     uint32_t age;
+    uint32_t penv;      /* pitch-envelope factor, Q16 (65536 = written
+                         * pitch); 65536 whenever the patch has none */
+    uint8_t penv_sh;    /* the envelope's decay shift (patch data) */
 } voice[NV];
 static volatile uint32_t ages;
 
@@ -494,6 +531,8 @@ static int piano_on_p(uint8_t note, uint8_t vel, uint8_t patch, uint8_t cls) {
     }
     voice[pick].fb1 = 0;
     voice[pick].fb2 = 0;
+    voice[pick].penv = P->penv_from ? ((uint32_t)P->penv_from << 8) : 65536u;
+    voice[pick].penv_sh = P->penv_sh;
     voice[pick].note = note;
     voice[pick].vel = vel;
     voice[pick].patch = patch;
@@ -562,6 +601,7 @@ static void app_audio(int32_t *out, uint32_t n) {
         for (i = 0; i < n; i++) {
             int32_t bus1 = 0, bus2 = 0, vout = 0;
             int8_t o8;
+            uint32_t pf = voice[v].penv;   /* this sample's pitch factor */
             /* OP6 down to OP1: every modulator is computed before
              * its target, and each bus is written before it is read. */
             for (o8 = 5; o8 >= 0; o8--) {
@@ -589,7 +629,16 @@ static void app_audio(int32_t *out, uint32_t n) {
                 } else {
                     if (R->add[o]) bus2 += y; else bus2 = y;
                 }
-                op[o].ph += op[o].inc;
+                op[o].ph += (pf == 65536u) ? op[o].inc
+                    : (uint32_t)(((uint64_t)op[o].inc * pf) >> 16);
+            }
+            if (pf != 65536u) {
+                /* the pitch envelope decays toward unity; within
+                 * 1/256 of it, it lands exactly and the voice is
+                 * back to its written increments. */
+                uint32_t d = pf - 65536u;
+                d -= d >> voice[v].penv_sh;
+                voice[v].penv = (d < 256u) ? 65536u : 65536u + d;
             }
             /* the carriers, mixed and velocity-scaled. >> 2 is
              * headroom for the carrier sum (up to 3 carriers, each

@@ -30,6 +30,13 @@ Piece 0 = First Five Notes (72 BPM, 38.4 px/s): 13 notes at piece-x
 80,112,...,464 (C5 D5 E5 F5 G5 F5 E5 D5 C5 D5 E5 D5 C5), end bar 576.
 Piece 1 = Ode to Joy, first note E5 at piece-x 80.
 
+In the v0.30 book order the song is slot 0 and these two lessons
+are slots 1 and 2, so the suite seeds the persisted selection at
+1 (the "piece 0" of this suite) for every run; all script
+navigation is relative from there (SELECT +1 reaches "piece 1",
++6 reaches Free Play), and the chord build's one lesson likewise
+sits at slot 1 of its book.
+
 Usage: python3 tests/v027_verify.py   (from the build tree root)
 """
 import hashlib
@@ -41,6 +48,7 @@ import wave
 import numpy as np
 from PIL import Image
 
+os.environ["DINGHY_SEED_SEL"] = "1"   # "piece 0" (see docstring)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOST = os.path.join(ROOT, "build/host/dinghy")
 OUT = os.path.join(ROOT, "build/host")

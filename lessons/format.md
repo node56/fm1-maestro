@@ -98,14 +98,15 @@ from the chart; the firmware only plays what it is given:
 |---|---|---|
 | `percussion` | 9 (GM drums) | a quarter-note pulse on every beat, written on the middle-C key (the drum pad) |
 | `bass` | 1 | the chart's chord root on beats 1 and 3, rests between, written an octave above where it sounds |
-| `harmony` | 2 | reserved — no events yet, by design |
+| `harmony` | 2 | chord tones, one per beat, cycling root–3rd–5th–3rd through each bar, written around middle C (a tone above B5 folds down an octave); sounds as written |
 | `melody` | 0 | the lesson's events, unchanged |
 
-`chart:` is required when `bass` or `percussion` is among the
-parts; only the chord roots are used (`C`, `F#`, `Bbm7` all parse —
-the suffix is ignored). A book with no `.song` file is fine: it
-gets the empty song (one reserved part, no events), which is all
-the firmware needs to link and run.
+`chart:` is required when `bass`, `percussion` or `harmony` is
+among the parts. The bass uses the chord roots; the harmony also
+reads the suffix — a minor suffix (`m`, `min`, `m7`, … but not
+`maj`) makes its third a minor third. A book with no `.song`
+file is fine: it gets the empty song (one reserved part, no
+events), which is all the firmware needs to link and run.
 
 ## What the compiler checks
 
@@ -123,7 +124,8 @@ and the problem and stops the build.
 * Every note playable: within MIDI 29–103 — the keys cover 53–79
   and the OCT± shift reaches two octaves either way. A note
   outside the staff's visible band (it would not draw on the
-  sheet) is a warning, not an error: it still sounds.
+  sheet) is a warning, not an error: it still sounds. Generated
+  song parts are held to the same two checks.
 * Titles and sources fit their fixed C arrays (48 / 96 bytes).
 * Two lesson files must not sanitise to the same C symbol
   (`a-b.lesson` vs `a_b.lesson`).

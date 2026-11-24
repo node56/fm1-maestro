@@ -74,7 +74,9 @@ for frag, name in [
         ('{ 9, "Percussion", 8, song_fixture_song_percussion_events }', "percussion part"),
         ('{ 1, "Bass", 8, song_fixture_song_bass_events }', "bass part"),
         ("{ 65, 96, 0 }", "bass follows the chart (F root in bar 2)"),
-        ('{ 2, "Harmony", 0, 0 }', "harmony reserved, no events"),
+        ("song_fixture_song_harmony_events[8]", "harmony array (2 bars x 4 beats)"),
+        ('{ 2, "Harmony", 8, song_fixture_song_harmony_events }', "harmony part"),
+        ("{ 69, 96, 0 }", "harmony follows the chart (F bar: 3rd of root-3rd-5th-3rd)"),
         ('{ 0, "Melody", 7, song_fixture_song_melody_events }', "melody part")]:
     check(f"valid: generated C has {name}", frag in gen)
 
@@ -140,19 +142,23 @@ else:
                 return "timeout"
 
         # SELECT through every entry of the song-less book, then
-        # live on the empty song slot for a while.
+        # live on the empty song slot for a while. v0.30 order:
+        # the song is slot 0 (where the boot lands), the lessons
+        # follow, empty piece slots are skipped, Free Play last.
         rc = host_run("walk",
                       "T\n"
-                      "200 shot\n"          # sel 0: first lesson
+                      "200 shot\n"          # sel 0: the empty song (boot)
                       "400 enc 0 1\n"
-                      "700 shot\n"          # sel 1: second lesson
+                      "700 shot\n"          # sel 1: first lesson
                       "900 enc 0 1\n"
-                      "1200 shot\n"         # sel 5: the drill
+                      "1200 shot\n"         # sel 2: second lesson
                       "1400 enc 0 1\n"
-                      "1700 shot\n"         # sel 6: Free Play
+                      "1700 shot\n"         # sel 6: the drill (slots 3-5 skipped)
                       "1900 enc 0 1\n"
-                      "2200 shot\n"         # sel 7: the empty song
-                      "3200 shot\n"         # still parked, 1 s on
+                      "2200 shot\n"         # sel 7: Free Play
+                      "2400 enc 0 1\n"
+                      "2700 shot\n"         # sel 0 again: the song, wrapped
+                      "3200 shot\n"         # still parked, 0.5 s on
                       "3400 btn 12\n"       # PLAY on the empty song
                       "4400 shot\n"
                       "4600 keys 0x80\n"    # a press (C5): a ghost
@@ -168,13 +174,13 @@ else:
               rc == 0, f"rc {rc}")
         if rc == 0:
             check("host: SELECT moved (lesson 2 != lesson 1)",
-                  scroll_hash(HOST_TMP + "/walk-700.ppm")
-                  != scroll_hash(HOST_TMP + "/walk-200.ppm"))
+                  scroll_hash(HOST_TMP + "/walk-1200.ppm")
+                  != scroll_hash(HOST_TMP + "/walk-700.ppm"))
             check("host: the empty song's screen is not Free Play's",
-                  scroll_hash(HOST_TMP + "/walk-2200.ppm")
-                  != scroll_hash(HOST_TMP + "/walk-1700.ppm"))
+                  scroll_hash(HOST_TMP + "/walk-2700.ppm")
+                  != scroll_hash(HOST_TMP + "/walk-2200.ppm"))
             check("host: the parked empty song is stable",
-                  scroll_hash(HOST_TMP + "/walk-2200.ppm")
+                  scroll_hash(HOST_TMP + "/walk-2700.ppm")
                   == scroll_hash(HOST_TMP + "/walk-3200.ppm"))
             check("host: a press on/near the empty song sounds",
                   wav_rms(HOST_TMP + "/walk.wav", 4.6, 4.95) > 100,
@@ -187,7 +193,7 @@ else:
             check("host: the firmware was still running at 9 s",
                   last >= 8500, f"last frame {last} ms")
         rc = host_run("seeded", "T\n300 shot\n1300 shot\n2000 end\n",
-                      seed=7)
+                      seed=0)
         check("host: cold boot seeded at the song slot runs",
               rc == 0, f"rc {rc}")
         if rc == 0:
@@ -196,7 +202,7 @@ else:
                   == scroll_hash(HOST_TMP + "/seeded-1300.ppm"))
             check("host: seeded park == SELECT-walk park",
                   scroll_hash(HOST_TMP + "/seeded-300.ppm")
-                  == scroll_hash(HOST_TMP + "/walk-2200.ppm"))
+                  == scroll_hash(HOST_TMP + "/walk-2700.ppm"))
 
 # ---------------------------------------------------------------- errors
 FAIL_CASES = [
@@ -255,6 +261,35 @@ r = run_tool(GEN + "/part_cap", GEN + "/part.c")
 check("errors: a generated part over the cap fails",
       r.returncode != 0 and "part 'Percussion' has 260 events" in r.stderr,
       r.stderr.strip()[:160])
+
+# ------------------------------------------------------- the real book
+# The shipped book's harmony part (v0.30): every guide pitch must
+# sit inside the playable range and on the staff -- the compiler's
+# generated-part validation already guarantees it; assert it here
+# against the real lessons/ so a future chart change that breaks
+# the recipe's fold rule fails loudly.
+import importlib.util
+import re as _re
+_spec = importlib.util.spec_from_file_location("lessons2c_tool", TOOL)
+_tool = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_tool)
+r = run_tool(os.path.join(REPO, "lessons"), os.path.join(TMP, "real.c"))
+check("real book: compiles", r.returncode == 0, r.stderr.strip()[:200])
+if r.returncode == 0:
+    gen = open(os.path.join(TMP, "real.c")).read()
+    m = _re.search(r"song_\w+_harmony_events\[\d+\] = \{(.*?)\};",
+                   gen, _re.S)
+    check("real book: a harmony part is generated", m is not None)
+    if m:
+        pitches = [int(p) for p in
+                   _re.findall(r"\{ (\d+), \d+, 0 \}", m.group(1))]
+        check("real book: harmony guide pitches all playable "
+              "(29..103) and on the staff (y 48..204)",
+              bool(pitches) and all(
+                  _tool.PLAY_MIN <= p <= _tool.PLAY_MAX
+                  and _tool.SCROLL_MIN <= _tool.staff_y(p)
+                  <= _tool.SCROLL_MAX for p in pitches),
+              f"pitches {pitches}")
 
 # ---------------------------------------------------------------- warning
 r, _gen = compile_ok("pitch_offstaff")

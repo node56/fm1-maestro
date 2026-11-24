@@ -43,6 +43,10 @@ import numpy as np
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# v0.30: the book opens on the song; this suite works the first
+# lesson (72 BPM), which is now slot 1 -- seed the persisted
+# selection there. Its navigation is relative from that slot.
+os.environ["DINGHY_SEED_SEL"] = "1"
 ROOT = os.path.dirname(HERE)
 HOST = os.path.join(ROOT, "build", "host")
 BIN = os.path.join(HOST, "dinghy")

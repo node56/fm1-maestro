@@ -390,8 +390,18 @@ def validate_lesson(les, warn):
 #     between, written at a readable octave (root + 60). The bass
 #     channel is a transposing instrument: it sounds an octave
 #     below written, like a double bass.
-#   harmony (channel 2): reserved -- no events yet, by design.
+#   harmony (channel 2): chord tones, one per beat, cycling
+#     root-3rd-5th-3rd through each bar (the 3rd is minor when
+#     the chart suffix says so). Written around middle C like
+#     the bass (tone = 60 + root + interval); a tone above B5
+#     folds down an octave, so the line stays inside the
+#     staff's drawable band. The channel sounds as written.
 #   melody (channel 0): the lesson's events, unchanged.
+#
+# Generated parts (percussion, bass, harmony) are held to the
+# same pitch checks as a lesson's notes -- playable range is an
+# error, off-staff is a warning. The melody needs no second
+# pass: it was already validated as a lesson.
 
 PART_RECIPES = {   # name -> (channel, display name)
     "percussion": (9, "Percussion"),
@@ -412,15 +422,20 @@ class Song:
         self.tempo, self.beats, self.parts = tempo, beats, parts
 
 
-def chord_root(tok, path):
+def chord_info(tok, path):
+    """(root pitch class, third interval) for a chart chord: the
+    third is 4 semitones, or 3 when the suffix marks a minor
+    chord ('m', 'min', 'm7', ... -- but not 'maj')."""
     m = CHORD_RE.match(tok)
     if not m:
         raise CompileError(f"{path}: bad chord {tok!r} in chart")
-    letter, acc, _suffix = m.groups()
-    return SEMI[letter.upper()] + (1 if acc == "#" else -1 if acc == "b" else 0)
+    letter, acc, suffix = m.groups()
+    root = SEMI[letter.upper()] + (1 if acc == "#" else -1 if acc == "b" else 0)
+    minor = suffix.startswith("m") and not suffix.startswith("maj")
+    return root, 3 if minor else 4
 
 
-def parse_song(path, lessons_by_stem):
+def parse_song(path, lessons_by_stem, warn):
     headers = {}
     for raw in path.read_text().splitlines():
         line = raw.strip()
@@ -471,7 +486,7 @@ def parse_song(path, lessons_by_stem):
     nbars = total // bar_ticks
 
     chart = None
-    if "bass" in keys or "percussion" in keys:
+    if "bass" in keys or "percussion" in keys or "harmony" in keys:
         if "chart" not in headers:
             raise CompileError(
                 f"{path}: parts {headers['parts']!r} are generated from "
@@ -481,7 +496,7 @@ def parse_song(path, lessons_by_stem):
             raise CompileError(
                 f"{path}: chart has {len(chart)} bars, the melody "
                 f"has {nbars}")
-        roots = [chord_root(tok, path) for tok in chart]
+        chords = [chord_info(tok, path) for tok in chart]
 
     parts = []
     for key in keys:
@@ -494,12 +509,20 @@ def parse_song(path, lessons_by_stem):
         elif key == "bass":
             events = []
             for bar in range(nbars):
-                root = 60 + roots[bar]
+                root = 60 + chords[bar][0]
                 for beat in range(beats):
                     events.append((root, 96, 0) if beat in (0, 2)
                                   else (0, 96, 1))
         elif key == "harmony":
             events = []
+            for bar in range(nbars):
+                root_pc, third = chords[bar]
+                cycle = (0, third, 7, third)
+                for beat in range(beats):
+                    tone = 60 + root_pc + cycle[beat % len(cycle)]
+                    if tone > 71:   # keep the line in [60, 71]:
+                        tone -= 12  # on the staff, under the melody
+                    events.append((tone, 96, 0))
         else:   # melody
             events = list(melody.events)
         if len(events) > MAX_EVENTS:
@@ -512,6 +535,24 @@ def parse_song(path, lessons_by_stem):
                 f"{path}: part {name!r} spans "
                 f"{sum(t for _, t, _ in events)} ticks, the melody "
                 f"spans {total} -- the parts must share one bar grid")
+        if key != "melody":   # generated parts: the lesson checks
+            for midi, _ticks, is_rest in events:
+                if is_rest:
+                    continue
+                if not PLAY_MIN <= midi <= PLAY_MAX:
+                    raise CompileError(
+                        f"{path}: generated part {name!r} writes "
+                        f"{note_name(midi)} (MIDI {midi}), which can "
+                        f"never be played: the keys cover "
+                        f"{KEY_MIN}..{KEY_MAX} and the octave shift "
+                        f"reaches {PLAY_MIN}..{PLAY_MAX}")
+                y = staff_y(midi)
+                if not SCROLL_MIN <= y <= SCROLL_MAX:
+                    warn(f"{path}: generated part {name!r} writes "
+                         f"{note_name(midi)} (MIDI {midi}) at staff "
+                         f"y {y}, outside the sheet's {SCROLL_MIN}.."
+                         f"{SCROLL_MAX} band -- it will sound, but "
+                         f"the player cannot see it on the staff")
         parts.append(SongPart(key, channel, name, events))
     return Song(path, title, melody.headers["tempo"], beats, parts)
 
@@ -607,7 +648,7 @@ def compile_book(book_dir, warn):
     song = None
     if song_files:
         by_stem = {f.stem: les for f, les in zip(files, lessons)}
-        song = parse_song(song_files[0], by_stem)
+        song = parse_song(song_files[0], by_stem, warn)
     return lessons, song
 
 
