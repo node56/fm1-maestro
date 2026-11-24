@@ -15,8 +15,9 @@ The repo is the source of truth for the tests. This runner:
      tests), verify_cleanup, the lessons2c compiler suite (run
      from the repo: it tests tools/lessons2c.py against its
      fixtures, plus a host build of a song-less book), and
-     v022..v032 (v032 is the cold-path matrix: every book entry
-     booted from a persisted selection);
+     v022..v033 (v032 is the cold-path matrix: every book entry
+     booted from a persisted selection; v033 is the accidentals
+     suite: a black-key pitch wears its sharp in every plane);
   4. prints a per-suite summary and exits non-zero on any failure.
 
 The build tree is the Dinghy template checkout (SETUP.md):
@@ -107,7 +108,7 @@ def main():
                    ["python3", os.path.join(BT, "tests/verify_cleanup.py")]))
     suites.append(("lessons2c",
                    [sys.executable, os.path.join(REPO, "tests/lessons2c_test.py")]))
-    for n in range(22, 33):
+    for n in range(22, 34):
         name = f"v{n:03d}"
         suites.append((name, ["python3", os.path.join(BT, "tests",
                                                       f"{name}_verify.py")]))

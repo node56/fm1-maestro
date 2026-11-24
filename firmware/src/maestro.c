@@ -205,6 +205,22 @@
  * flags. Equivalence was proven, not assumed: the full host
  * regression passed unchanged, and an old-vs-new sweep ran every
  * script fixture through both binaries and diffed every artifact.
+ *
+ * v0.29: accidentals. A black-key pitch now wears a sharp sign
+ * before its notehead, drawn in ui_note() so the guide (blue),
+ * the take (black) and a missed note in the replay (amber) all
+ * get it, each in its own plane. ui_dia() has always put a sharp
+ * on its natural's diatonic step, and ui_accidental() existed but
+ * was never called -- so a C# drew exactly as a C. That bit in
+ * practice: the generated drill is a semitone walk, and its first
+ * note is a black key about a third of the time; the learner
+ * reads the sheet exactly as drawn, presses the natural, and the
+ * kick-off silently refuses (a wrong first pitch starts nothing,
+ * by design). Every sharp is signed individually -- no key
+ * signatures, no naturals -- so an unsigned notehead reads as
+ * the natural. All content voices sharps, never flats (the
+ * drill and the .lesson/.mid pipeline produce sharps by
+ * construction), so the sign is always the sharp glyph.
  */
 
 #include "fm_piano.c"   /* DX7 FM piano presets (E.PIANO 4 default) -- v0.19 */

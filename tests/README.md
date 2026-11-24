@@ -54,6 +54,10 @@ one version's behaviour; run them via the runner, not by hand.
   after `verify_cleanup.py`.
 - `tests/v032_verify.py` is the cold-path matrix: every book
   entry booted from a persisted selection, first gesture checked.
+- `tests/v033_verify.py` is the accidentals suite (v0.29): a
+  black-key pitch wears the sharp glyph in the blue guide, the
+  black take and the amber replay, matched against the glyph
+  bitmap in `glyphs.h`; white keys wear nothing.
 - `tests/run_host.sh` (from the template) compiles the same
   `maestro.c` for interactive host runs: screen → PNGs, sound →
   WAV, scripted keys/MIDI. Iterate on lesson feel here before

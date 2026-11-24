@@ -37,7 +37,7 @@ void ui_plane_amber(void);                 /* draw in amber (missed notes, repla
 /* notation, drawn at absolute buffer x into the selected plane. */
 int32_t ui_dia(int32_t midi);              /* diatonic steps, E4 == 37 */
 uint32_t ui_y_of(int32_t dia);             /* buffer y for a diatonic step */
-void ui_note(uint32_t x, int32_t midi, uint32_t ticks);
+void ui_note(uint32_t x, int32_t midi, uint32_t ticks);   /* a black-key pitch wears its sharp */
 void ui_rest(uint32_t x, uint32_t ticks);
 void ui_bar(uint32_t x);                   /* bar line across the staff */
 void ui_endbar(uint32_t x);                /* final double bar (thin + thick) */

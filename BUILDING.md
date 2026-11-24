@@ -94,7 +94,11 @@ then runs, in order:
 - `tests/v032_verify.py` — the cold-path matrix: every book entry
   (0–5 lessons + drill, 6 Free Play, 7 the song, plus an
   out-of-range persisted value) booted cold from a persisted
-  selection, performing its designed first gesture.
+  selection, performing its designed first gesture;
+- `tests/v033_verify.py` — the accidentals suite (v0.29): the
+  sharp glyph a black-key pitch wears, checked in the blue
+  guide, the black take and the amber replay against the bitmap
+  in `glyphs.h`.
 
 The template's own checks (`tests/run_tests.sh` in the build tree:
 loader, OTA, installer, flash maps) are separate and still run

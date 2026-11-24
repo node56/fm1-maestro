@@ -136,6 +136,23 @@ void ui_note(uint32_t x, int32_t midi, uint32_t ticks) {
     int32_t dia = ui_dia(midi);
     uint32_t y = ui_y_of(dia);
     uint32_t open = ticks >= 192u;
+    /* a black-key pitch wears a sharp before its notehead (v0.29).
+     * ui_dia() puts a sharp on its natural's diatonic step, so
+     * without the sign a C# draws exactly as a C. Every sharp is
+     * signed individually -- no key signatures, no naturals -- so
+     * an unsigned notehead reads as the natural. The glyph goes
+     * through px() like everything else here, so it lands in the
+     * caller's plane: blue for the guide, amber for a missed note
+     * in the replay, black for the take. The glyph is 14 wide and
+     * the head spans x-7..x+7: at x-23 its right edge sits 2 px
+     * left of the head. Dense runs (an eighth is 16 px, a
+     * sixteenth 8) overlap the previous note -- drawn anyway, as
+     * real engraving crowds too; the sign's strokes stand taller
+     * than a notehead, so it stays readable. */
+    {
+        static const int8_t SHARP_PC[12] = {0,1,0,1,0,0,1,0,1,0,1,0};
+        if (SHARP_PC[midi % 12]) ui_accidental((int32_t)x - 23, y, 0u);
+    }
     ledgers(x, dia);
     head(x, y, open);
     if (ticks < 384u) stem(x, y, dia);
