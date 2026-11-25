@@ -260,8 +260,35 @@ static void overlay_text(uint32_t x, uint32_t y, const char *s,
     cv_text(2, 0, f, s, INK);
     cv_blit(x, y);
 }
+/* The title band runs x=8..220: the octave indicator owns
+ * x=220..240 and is drawn after the title on every repaint, so a
+ * title wider than the band has its tail erased by it (v0.31: the
+ * song's percussion title lost its last two characters -- and the
+ * title blit also ran 4 px past the screen edge, which the
+ * device's unclipped lcd_blit turned into garbage). Truncate
+ * with "..." to fit, here in the title path, not per title. The
+ * canvas adds 4 px of pad, so the text itself must fit 208 px. */
+#define TITLE_MAX_W 208
 void ui_title(const char *s) {
-    overlay_text(8u, TITLE_Y, s, &FONT_S, 16u);
+    char b[48];
+    uint32_t i = 0;
+    int32_t dots = text_w(&FONT_S, "...");
+    if (text_w(&FONT_S, s) <= TITLE_MAX_W) {
+        overlay_text(8u, TITLE_Y, s, &FONT_S, 16u);
+        return;
+    }
+    b[0] = 0;
+    while (s[i] && i < sizeof(b) - 4u) {
+        b[i] = s[i];
+        b[i + 1u] = 0;
+        if (text_w(&FONT_S, b) + dots > TITLE_MAX_W) {
+            b[i] = 0;
+            break;
+        }
+        i++;
+    }
+    b[i++] = '.'; b[i++] = '.'; b[i++] = '.'; b[i] = 0;
+    overlay_text(8u, TITLE_Y, b, &FONT_S, 16u);
 }
 /* decimal, no libc dependency (the host build doesn't get libc.c). */
 static void u32_str(char *b, uint32_t v) {

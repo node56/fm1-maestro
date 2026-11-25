@@ -18,6 +18,7 @@ template checkout:
 | `firmware/src/*` | `firmware/src/` (the app: `maestro.c`, `ui.c`, `drills.c`, `store.c`, `fm_piano.c`, `midi.c`, headers) |
 | `firmware/overlay/platform.c` | `firmware/src/platform.c` — **replaces** the template's |
 | `firmware/overlay/dinghy.c` | `firmware/src/dinghy.c` — **replaces** the template's (the app entry: it `#include`s `platform.c`, then the app sources, as one translation unit) |
+| `firmware/overlay/lcd.c` | `firmware/src/lcd.c` — **replaces** the template's (v0.32: `lcd_blit` clips to the screen, as `lcd_fill` already did) |
 | `lessons/` + `tools/lessons2c.py` | generates `firmware/src/lessons_data.c` (below) |
 | `tests/*` | `tests/` (the host suites; the runner syncs them) |
 
@@ -31,6 +32,12 @@ PWM-mixed — in both the FM-1 and SMK-37 branches. Everything else
 in the file is the template's, unchanged. (This supersedes the
 "keep the template's platform.c" line in `SETUP.md` §0, which
 predates v0.27.)
+
+`firmware/overlay/lcd.c` is the template's LCD file plus one fix,
+kept here for the same reason: from v0.32, `lcd_blit` clips to the
+screen (fast path unchanged when the blit fits; one window per row
+when it doesn't, so the source stride stays intact). Everything
+else in the file is the template's, unchanged.
 
 `lessons_data.c` is generated, never edited:
 

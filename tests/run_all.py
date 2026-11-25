@@ -57,7 +57,7 @@ def sync():
         if os.path.isfile(src):
             pairs.append((src, os.path.join(BT, "firmware/src",
                                             os.path.basename(src))))
-    for name in ("platform.c", "dinghy.c"):
+    for name in ("platform.c", "dinghy.c", "lcd.c"):
         pairs.append((os.path.join(REPO, "firmware/overlay", name),
                       os.path.join(BT, "firmware/src", name)))
     for src in sorted(glob.glob(os.path.join(REPO, "tests/*_verify.py"))

@@ -1024,7 +1024,8 @@ static void render_window(uint32_t sc) {
         int32_t ex = (int32_t)free_end_x - (int32_t)sc;
         if (ex >= 0 && ex < 240) ui_endbar((uint32_t)ex);
     }
-    /* the current sheet's take only: other sheets' notes never draw. */
+    /* the current score's take only: other scores' notes never
+     * draw (their takes are heard, not seen), nor other sheets'. */
     {
         uint16_t b = sheet_notes_begin(sel), e = sheet_notes_end(sel);
         uint32_t t_prev = 0;   /* absolute time of the event before i */
@@ -1040,8 +1041,12 @@ static void render_window(uint32_t sc) {
                 ui_bar(sx);
                 if (sx + 5u < 240u) ui_bar(sx + 5u);
             } else if (mev_is_note_on(&rec[i])) {
-                uint32_t off_px = note_off_px(b, e, (uint16_t)i, rec[i].d1, t);
-                uint32_t dur_ticks = (off_px > px ? off_px - px : 0) * 96u / PXQ;
+                /* backing scores' takes are heard, not seen: their
+                 * black notes drew over this score's blue guide. */
+                uint32_t off_px, dur_ticks;
+                if (mev_score(&rec[i]) != cur_score()) continue;
+                off_px = note_off_px(b, e, (uint16_t)i, rec[i].d1, t);
+                dur_ticks = (off_px > px ? off_px - px : 0) * 96u / PXQ;
                 ui_note(sx, rec[i].d1, dur_ticks ? dur_ticks : 96u);
             }
         }

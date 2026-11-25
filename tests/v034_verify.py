@@ -31,6 +31,19 @@ old suites could not have caught:
   F  the tempo overlay (v0.31 fix): 100 -> 98 BPM leaves no
      stale glyph -- the 98 band after 100 -> 98 is pixel-equal
      to a fresh 98 band, and differs from the 100 band.
+  G  the long title truncates inside x=8..220 (v0.32): the
+     octave indicator at x=220 erased the tail of the 29-char
+     percussion title, and the 236 px title blit ran 4 px past
+     the screen edge into the device's unclipped lcd_blit. The
+     song's longest title must render fully within the band, with
+     no ink at x>=220, and the truncation must be deterministic.
+  H  only the current score's take draws (v0.32): the take loop
+     drew every score's take in black on the current score's
+     sheet, so the melody sheet showed the drum/bass/harmony
+     takes over the blue guide. Proved differentially: the
+     melody sheet during the melody take is pixel-identical
+     whether or not the other three takes are recorded. And a
+     Free Play take still draws.
 
 Usage: python3 tests/v034_verify.py   (from the build tree root --
 tests/run_all.py syncs this repo's tests there and runs it)
@@ -104,6 +117,23 @@ def band_hash(path, rows):
     """hash of a horizontal band (title: rows 0..48; tempo: 224..240)."""
     im = np.array(Image.open(path).convert("RGB"))
     return hashlib.sha256(im[rows[0]:rows[1]].tobytes()).hexdigest()
+
+
+def dark_px(path, rows, x0=0, x1=240):
+    """count of near-black pixels in a band (INK text and notes)."""
+    im = np.array(Image.open(path).convert("RGB")).astype(np.int16)
+    band = im[rows[0]:rows[1], x0:x1]
+    return int(((band[:, :, 0] < 100) & (band[:, :, 1] < 100)
+                & (band[:, :, 2] < 100)).sum())
+
+
+def rightmost_ink(path, rows):
+    """rightmost column with a near-black pixel in a band, or -1."""
+    im = np.array(Image.open(path).convert("RGB")).astype(np.int16)
+    band = im[rows[0]:rows[1]]
+    dark = (band[:, :, 0] < 100) & (band[:, :, 1] < 100) & (band[:, :, 2] < 100)
+    cols = np.where(dark.any(axis=0))[0]
+    return int(cols.max()) if len(cols) else -1
 
 
 def still(out, ms_list):
@@ -308,6 +338,66 @@ check("F tempo: 100 -> 98 leaves no stale glyph (band == a fresh 98 band)",
       np.array_equal(band("v034f", 1500), band("v034ff", 1000)))
 check("F tempo: the 100 band differs from the 98 band (the change happened)",
       not np.array_equal(band("v034f", 1000), band("v034ff", 1000)))
+
+# ---------------------------------------------------------------- G: the long title truncates inside x=8..220
+# (v0.32: the octave indicator at x=220 erased the tail of the
+# 29-char percussion title, and the 236 px title blit ran 4 px past
+# the screen edge into the device's unclipped lcd_blit.)
+ev = [(500, "shot")]
+run(write_script("v034_title32.txt", ev, 800), "v034g", seed=0)
+check("G title: no ink at x>=220 in the title band (the octave strip owns it)",
+      dark_px(shot("v034g", 500), (0, 48), 220, 240) == 0,
+      f"ink={dark_px(shot('v034g', 500), (0, 48), 220, 240)}")
+check("G title: the truncated title ends at x=213 (26 chars, 'Ode to Joy (Song): Perc...')",
+      rightmost_ink(shot("v034g", 500), (10, 26)) == 213,
+      f"rightmost={rightmost_ink(shot('v034g', 500), (10, 26))}")
+check("G title: the truncated band is deterministic (== the v034a boot band)",
+      band_hash(shot("v034g", 500), (0, 48)) == t_song)
+
+# ---------------------------------------------------------------- H: only the current score's take draws
+# (v0.32: the take loop drew every score's take in black on the
+# current score's sheet, so the melody sheet showed the drum/bass/
+# harmony takes over the blue guide. Backing is heard, not seen.)
+# H1: the melody sheet during the melody take is pixel-identical
+# whether or not the other three takes are recorded.
+ev = [(100, "T")]
+take(ev, 1000, PERC)
+take(ev, 11500, BASS)
+take(ev, 22000, HARM)
+take(ev, 32500, MEL)
+ev += [(35500, "shot"), (38500, "shot")]
+run(write_script("v034_takefilter_all.txt", ev, 39500), "v034h1", seed=0)
+ev = [(100, "T"),
+      (500, "enc 3 1"), (600, "enc 3 1"), (700, "enc 3 1")]  # percussion -> bass -> harmony -> melody
+take(ev, 1000, MEL)
+ev += [(4000, "shot"), (7000, "shot")]
+run(write_script("v034_takefilter_mel.txt", ev, 8000), "v034h2", seed=0)
+check("H take: the melody sheet 3 s into the take is the same with all takes recorded as with the melody alone",
+      scroll_hash(shot("v034h1", 35500)) == scroll_hash(shot("v034h2", 4000)))
+check("H take: the same 6 s into the take",
+      scroll_hash(shot("v034h1", 38500)) == scroll_hash(shot("v034h2", 7000)))
+# H2: a Free Play take still draws (its events are tagged with its
+# score, and the filter keeps the current score's take).
+ev = [(100, "enc 0 7"),
+      (200, "btn 12"), (300, "btn 13"),
+      (400, "keys 0x80"), (700, "keys 0"),
+      (800, "keys 0x800"), (1100, "keys 0"),
+      (1200, "keys 0x4000"), (1500, "keys 0"),
+      (1600, "btn 13"), (1700, "btn 12"),
+      (2000, "shot")]
+run(write_script("v034_free_take.txt", ev, 2500), "v034h3", seed=0)
+ev = [(100, "enc 0 7"),
+      (200, "btn 12"), (300, "btn 13"),
+      (1600, "btn 13"), (1700, "btn 12"),
+      (2000, "shot")]
+run(write_script("v034_free_notake.txt", ev, 2500), "v034h4", seed=0)
+n_take = dark_px(shot("v034h3", 2000), (48, 204))
+n_free = dark_px(shot("v034h4", 2000), (48, 204))
+check("H free: a Free Play take draws (its band differs from the take-free band)",
+      scroll_hash(shot("v034h3", 2000)) != scroll_hash(shot("v034h4", 2000)))
+check("H free: the take adds black noteheads to the scroll band",
+      n_take > n_free + 50,
+      f"take={n_take} free={n_free}")
 
 print()
 if FAILS:
