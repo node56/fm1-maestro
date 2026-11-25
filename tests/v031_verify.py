@@ -23,12 +23,13 @@ Semantics asserted here:
   a chord group              all its pitches bright together
   the song's percussion part the drum-pad key is the target
   Free Play                  no guide, no target: no key bright
-  the end-of-take replay     the target follows the TAKE (the next
-                             Note On group of the recorded events),
-                             not the guide -- the implementer's
-                             choice the brief allowed
-  the book view              PLAY green (stopped is stopped), no
-                             target
+  the take's end (v0.31)     no replay any more: the take ends
+                             straight into the next piece, parked,
+                             and the target is the NEW piece's
+                             first note -- never the old take's
+  HOME at the park (v0.31)    no book view any more: HOME at the
+                             park leaves the parked view, PLAY
+                             green, the kick-off group still lit
   octave shift               the target pitch lights the key that
                              sounds it under the current shift
 
@@ -175,7 +176,7 @@ open(TMP + "/firmware/src/lessons_data.c", "w").write(
     "const uint8_t all_lessons_count = 1;\n"
     "/* stub song (v0.26): the firmware references ode_song; this\n"
     " * variant has no song, so it provides an empty one. */\n"
-    "const song_t ode_song = { \"Ode to Joy\", 96, 4, 1, { { 9, \"Percussion\", 0, 0 } } };\n")
+    "const piece_t ode_piece = { \"Ode to Joy\", 96, 4, 1, { { SCORE_PATCH_DRUM, 0, 0, \"Percussion\", 0, 0 } } };\n")
 r = subprocess.run(["cc", "-O2", "-Wall", "-Wno-unused-function", "-DDINGHY_HOST",
                     '-DAPP_VER="dev"', "-Ifirmware/hal", "-Ifirmware/src",
                     "-Ifirmware/gen", "-o", TMP + "/dinghy", "firmware/src/dinghy.c"],
@@ -224,29 +225,40 @@ check("F free: parked, no key bright, all keys glow, PLAY green",
 check("F free: rolling, PLAY red and still no target",
       all_rows(rows, 400, 2500, lambda r: r[4] == 255 and r[3] == 0 and r[1] == 0))
 
-# ---------------------------------------------------------------- G: the replay lights the take
-# (the take rolls the piece's full ~13.4 s; the replay rewinds to
-# CURSOR_X and rolls the same distance again -- v028's timings.)
-rows = run("v031_replay", "300 keys 0x80\n900 keys 0\n40000 end\n")
-reloads = [r[0] for r in rows if r[0] > 20000 and r[3] == 255 and r[4] == 0]
-check("G replay: the take ends, replays, and the piece re-parks (PLAY green again)",
+# ---------------------------------------------------------------- G: the take ends into the load (v0.31)
+# (a GOOD take -- every blue note pressed as the playhead passes
+# -- rolls the piece's full ~13.4 s, then the NEXT piece loads at
+# once, parked -- no replay in between. The target after the load
+# is the new piece's first note (E5, key 11), never the old take's
+# C.)
+_notes = [(80, 0x80), (112, 0x200), (144, 0x800), (176, 0x1000),
+          (208, 0x4000), (240, 0x1000), (272, 0x800), (304, 0x200),
+          (336, 0x80), (368, 0x200), (400, 0x800), (432, 0x200),
+          (464, 0x80)]
+_g = []
+for _x, _m in _notes:
+    _t = 300 if _x == 80 else 300 + round((_x - 80) * 1000 / 38.4) - 120
+    _g.append(f"{_t} keys 0x{_m:x}")
+    _g.append(f"{_t + 200} keys 0")
+_g.append("40000 end")
+rows = run("v031_replay", "\n".join(_g) + "\n")
+reloads = [r[0] for r in rows if r[0] > 14000 and r[3] == 255 and r[4] == 0]
+check("G load: the take ends and the next piece loads, parked (PLAY green again)",
       bool(reloads), reloads[:1])
-kc_red = [r[0] for r in rows if r[0] > 12000 and r[1] == KC and r[4] == 255]
-check("G replay: during the replay the take's note (C, key 7) is lit while PLAY is red",
-      bool(kc_red), kc_red[:1])
-check("G replay: the guide is NOT the replay's target (D, never recorded, never lights)",
-      not any(r[0] > 12000 and r[1] == KD for r in rows))
-if reloads and kc_red:
-    t_end = reloads[0]
-    check("G replay: once the take's only note has sounded, no target remains (still red)",
-          exists(rows, kc_red[0] + 500, t_end - 100, lambda r: r[1] == 0 and r[4] == 255),
-          f"t_end={t_end}")
+check("G load: the target is the new piece's first note (E5, key 11), PLAY green",
+      exists(rows, 14000, 20000, lambda r: r[1] == KE and r[3] == 255 and r[4] == 0),
+      [r for r in rows if 14000 <= r[0] <= 20000][:1])
+check("G load: the old take's C (key 7) is never the target after the load",
+      not any(r[0] > 14000 and r[1] == KC for r in rows))
 
-# ---------------------------------------------------------------- H: the book view
+# ---------------------------------------------------------------- H: HOME at the park (v0.31)
+# There is no book view any more: HOME at the park leaves the
+# parked view -- PLAY green, the kick-off group (C5, key 7) still
+# the target, every other key at the dim glow.
 rows = run("v031_book", "300 btn 8\n2000 end\n")
 r = at(rows, 1000)
-check("H book: PLAY green in the book too (stopped is stopped), no target, all keys glow",
-      r is not None and r[3] == 255 and r[4] == 0 and r[1] == 0 and r[5] == ALLKEYS, r)
+check("H home: HOME at the park leaves the parked view (PLAY green, C5 still the target, the rest glow)",
+      r is not None and r[3] == 255 and r[4] == 0 and r[1] == KC and r[5] == (ALLKEYS ^ KC), r)
 
 # ---------------------------------------------------------------- I: the target follows the octave shift
 rows = run("v031_oct", "300 btn 0\n1500 end\n")   # OCT_DOWN: shift -1

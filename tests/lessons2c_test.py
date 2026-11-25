@@ -71,13 +71,13 @@ for frag, name in [
         ("all_lessons_count = 2", "two lessons"),
         ('"Fixture Song",\n    90, 4, 4,', "song header (tempo from the melody)"),
         ("song_fixture_song_percussion_events[8]", "percussion array (2 bars x 4 beats)"),
-        ('{ 9, "Percussion", 8, song_fixture_song_percussion_events }', "percussion part"),
-        ('{ 1, "Bass", 8, song_fixture_song_bass_events }', "bass part"),
+        ('{ SCORE_PATCH_DRUM, 0, 38, "Percussion", 8, song_fixture_song_percussion_events }', "percussion part"),
+        ('{ SCORE_PATCH_BASS, -12, 0, "Bass", 8, song_fixture_song_bass_events }', "bass part"),
         ("{ 65, 96, 0 }", "bass follows the chart (F root in bar 2)"),
         ("song_fixture_song_harmony_events[8]", "harmony array (2 bars x 4 beats)"),
-        ('{ 2, "Harmony", 8, song_fixture_song_harmony_events }', "harmony part"),
+        ('{ SCORE_PATCH_PIANO1, 0, 0, "Harmony", 8, song_fixture_song_harmony_events }', "harmony part"),
         ("{ 69, 96, 0 }", "harmony follows the chart (F bar: 3rd of root-3rd-5th-3rd)"),
-        ('{ 0, "Melody", 7, song_fixture_song_melody_events }', "melody part")]:
+        ('{ SCORE_PATCH_PRESET, 0, 0, "Melody", 7, song_fixture_song_melody_events }', "melody part")]:
     check(f"valid: generated C has {name}", frag in gen)
 
 # ---------------------------------------------------------------- no song
@@ -88,7 +88,7 @@ check("no_song: the compiler says so, without a warning",
       "no song" in r.stdout and "warning" not in r.stderr.lower(),
       f"stdout {r.stdout.strip()!r} stderr {r.stderr.strip()!r}")
 for frag, name in [('"Song",\n    96, 4, 1,', "empty song header"),
-                   ('{ 9, "Percussion", 0, 0 }', "one reserved part")]:
+                   ('{ SCORE_PATCH_DRUM, 0, 0, "Percussion", 0, 0 }', "one reserved part")]:
     check(f"no_song: generated C has {name}", frag in gen)
 check("no_song: no part arrays are emitted",
       "static const lesson_event_t song_" not in gen)
@@ -220,6 +220,7 @@ FAIL_CASES = [
     ("song_chart_bars", "book.song", ["chart has 1 bars", "melody has 2"]),
     ("song_no_melody", "book.song", ["nope.lesson", "not found"]),
     ("song_unknown_part", "book.song", ["unknown part", "kazoo"]),
+    ("song_bad_patch", "book.song", ["unknown patch", "BANJO"]),
 ]
 for case, fname, frags in FAIL_CASES:
     r = run_tool(os.path.join(FIX, case), os.path.join(TMP, case + ".c"))

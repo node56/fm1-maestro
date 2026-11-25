@@ -31,8 +31,10 @@ known to be clean.
   C  Free Play: a take note recorded on the black key wears its
      sharp in black (ink); the same take played on C natural
      does not -- the glyph pattern is absent there.
-  D  the drill's end-of-take replay: play only the first note,
-     and the missed C# (eighth) and D# draw their sharps in amber.
+  D  the drill's terrible take (v0.31: no replay): play only the
+     first note, and the take ends straight into the reload of the
+     same drill -- the missed C# (eighth) and D# still draw their
+     sharps in blue, and no amber exists anywhere.
 
 Usage: python3 tests/v033_verify.py   (from the build tree root --
 tests/run_all.py syncs this repo's tests there and runs it)
@@ -281,16 +283,25 @@ m, nx = find_glyph(ink, 186, 146, 166)
 check("C free play: the recorded C natural wears no sharp",
       m >= 100, f"best missing {m} at nx {nx}")
 
-# ---------------------------------------------------------------- D: misses in amber
+# ---------------------------------------------------------------- D: misses stay blue (v0.31)
+# The same script: play only the drill's first note (C#), so the
+# take is terrible and the same drill reloads at once, parked, its
+# take cleared. The missed notes are still on the sheet, in blue:
+# a C# past the first note (nx 156 at the park) and a D# (nx 204),
+# each wearing its sharp -- the guide itself is the feedback now,
+# and the amber plane is gone entirely.
 out = run("100 T\n1000 keys 0x100\n1300 keys 0\n"
           "12500 shot\n14000 end\n", "v033_replay", seed=6)
-_, amber, _ = masks(out + "-12500.ppm")
-m, nx = find_glyph(amber, 186, 60, 110)
-check("D replay: the missed C# (eighth) draws its sharp in amber",
+blue, amber, _ = masks(out + "-12500.ppm")
+m, nx = find_glyph(blue, 186, 120, 200)
+check("D reload: the missed C# (eighth) still draws its sharp in blue",
       m == 0, f"missing {m} at nx {nx}")
-m, nx = find_glyph(amber, 179, 110, 200)
-check("D replay: a missed D# draws its sharp in amber",
+m, nx = find_glyph(blue, 179, 150, 230)
+check("D reload: a missed D# still draws its sharp in blue",
       m == 0, f"missing {m} at nx {nx}")
+check("D reload: no amber anywhere (the amber plane is gone)",
+      int(amber[48:204].sum()) == 0,
+      f"got {int(amber[48:204].sum())} amber px")
 
 print()
 if FAILS:

@@ -1,9 +1,9 @@
-# v027 reference shots. v0.25: the device boots onto the tape,
-# parked at the first note; the book page is reached with HOME
-# (parked, empty take). Shots: boot parked, the book page
-# (scroll 0), piece 0 parked (REC entry), piece 1 parked (SELECT
-# on the tape). The first blue note sits at the cursor (x ~60)
-# when parked, at x ~80 on the book page.
+# v027 reference shots. v0.31: there is no book page any more -- the
+# device boots onto the tape, parked at the first note, and HOME at
+# the park is a repaint-only no-op. Shots: boot parked, after HOME
+# (the same park), piece 0 parked (REC entry), piece 1 parked
+# (SELECT on the tape). The first blue note sits at the cursor
+# (x ~60) when parked.
 100 shot
 300 btn 8
 500 shot

@@ -49,8 +49,12 @@ KEY_MIN, KEY_MAX = 53, 79   # the FM-1's 27 keys (key bit k = MIDI 53+k)
 OCT_RANGE = 24          # the OCT+- shift reaches +-2 octaves, so a
 PLAY_MIN = KEY_MIN - OCT_RANGE    # written pitch is playable iff it
 PLAY_MAX = KEY_MAX + OCT_RANGE    # lies in 29..103.
-SONG_MAX_PARTS = 4      # lesson.h SONG_MAX_PARTS
-SONG_CHANNELS = (0, 1, 2, 9)      # the take's part channels (lesson.h)
+PIECE_MAX_SCORES = 4    # lesson.h PIECE_MAX_SCORES
+# patch names a .song part may spell out (lesson.h SCORE_PATCH_*):
+# PRESET is the PRESETS knob's current patch, resolved at trigger
+# time; the others are fixed patches of the score.
+SCORE_PATCHES = {"PRESET": "SCORE_PATCH_PRESET", "PIANO1": "SCORE_PATCH_PIANO1",
+                 "BASS": "SCORE_PATCH_BASS", "DRUM": "SCORE_PATCH_DRUM"}
 # A guide note draws on the sheet iff its notehead's staff y (ui.c
 # ui_y_of, treble clef) falls inside the scroll region (ui.h:
 # SCROLL_TOP 48, SCROLL_H 156 -> 48..204). Outside it the note still
@@ -379,41 +383,51 @@ def validate_lesson(les, warn):
 #   title:    Ode to Joy
 #   melody:   l02-ode-to-joy.lesson   (the lesson that is the melody)
 #   chart:    C | G | F | C           (one chord per bar)
-#   parts:    percussion bass harmony melody   (learning order)
+#   parts:    percussion:DRUM bass:BASS harmony:PIANO1 melody:PRESET
 #
-# The parts are generated here, at build time, from the chart; the
-# firmware stays a player and nothing is generated at runtime.
-#   percussion (channel 9, the GM drum channel): a quarter-note
-#     pulse on every beat, written on the middle-C key -- the
-#     drum pad. The channel sounds at one fixed low pitch.
-#   bass (channel 1): the chord root on beats 1 and 3, rests
-#     between, written at a readable octave (root + 60). The bass
-#     channel is a transposing instrument: it sounds an octave
-#     below written, like a double bass.
-#   harmony (channel 2): chord tones, one per beat, cycling
+# Each part names its score and its patch (v0.31: a score is notes
+# AND the patch they sound with). The patch may be left off -- the
+# recipe's default is then used -- but the shipped book spells it
+# out. The parts are generated here, at build time, from the chart;
+# the firmware stays a player and nothing is generated at runtime.
+#   percussion (DRUM): a quarter-note pulse on every beat, written
+#     on the middle-C key -- the drum pad. The score sounds at one
+#     fixed low pitch (38), whichever pad key wrote it.
+#   bass (BASS): the chord root on beats 1 and 3, rests between,
+#     written at a readable octave (root + 60). The score is a
+#     transposing instrument: it sounds an octave below written,
+#     like a double bass.
+#   harmony (PIANO1): chord tones, one per beat, cycling
 #     root-3rd-5th-3rd through each bar (the 3rd is minor when
 #     the chart suffix says so). Written around middle C like
 #     the bass (tone = 60 + root + interval); a tone above B5
 #     folds down an octave, so the line stays inside the
-#     staff's drawable band. The channel sounds as written.
-#   melody (channel 0): the lesson's events, unchanged.
+#     staff's drawable band. The score sounds as written.
+#   melody (PRESET): the lesson's events, unchanged; the patch is
+#     the PRESETS knob's, resolved at trigger time.
 #
 # Generated parts (percussion, bass, harmony) are held to the
 # same pitch checks as a lesson's notes -- playable range is an
 # error, off-staff is a warning. The melody needs no second
 # pass: it was already validated as a lesson.
 
-PART_RECIPES = {   # name -> (channel, display name)
-    "percussion": (9, "Percussion"),
-    "bass": (1, "Bass"),
-    "harmony": (2, "Harmony"),
-    "melody": (0, "Melody"),
+# name -> (patch symbol, display name, transpose, fixed pitch):
+# the score's sound, as data. transpose/fixed_pitch are the
+# instrument's properties (a bass sounds an octave down, a drum
+# at one pitch); the patch itself is the score's and may be
+# spelled out per part in the .song file.
+PART_RECIPES = {
+    "percussion": ("SCORE_PATCH_DRUM", "Percussion", 0, 38),
+    "bass": ("SCORE_PATCH_BASS", "Bass", -12, 0),
+    "harmony": ("SCORE_PATCH_PIANO1", "Harmony", 0, 0),
+    "melody": ("SCORE_PATCH_PRESET", "Melody", 0, 0),
 }
 
 
 class SongPart:
-    def __init__(self, key, channel, name, events):
-        self.key, self.channel, self.name, self.events = key, channel, name, events
+    def __init__(self, key, patch, name, transpose, fixed_pitch, events):
+        self.key, self.patch, self.name = key, patch, name
+        self.transpose, self.fixed_pitch, self.events = transpose, fixed_pitch, events
 
 
 class Song:
@@ -459,7 +473,21 @@ def parse_song(path, lessons_by_stem, warn):
         raise CompileError(
             f"{path}: melody lesson {mel_ref!r} not found in this book")
 
-    keys = headers["parts"].split()
+    # Each entry names a score and, optionally, its patch
+    # ("bass" or "bass:BASS"); the patch defaults to the recipe's.
+    raw_keys, keys, patches = [], [], {}
+    for tok in headers["parts"].split():
+        if ":" in tok:
+            name, patch = tok.split(":", 1)
+            if patch not in SCORE_PATCHES:
+                raise CompileError(
+                    f"{path}: unknown patch {patch!r} for part {name!r} "
+                    f"(known: {', '.join(sorted(SCORE_PATCHES))})")
+            patches[name] = SCORE_PATCHES[patch]
+        else:
+            name = tok
+        raw_keys.append(name)
+        keys.append(name)
     for k in keys:
         if k not in PART_RECIPES:
             raise CompileError(
@@ -471,10 +499,10 @@ def parse_song(path, lessons_by_stem, warn):
         raise CompileError(
             f"{path}: a song needs exactly one melody part, "
             f"got {headers['parts']!r}")
-    if len(keys) > SONG_MAX_PARTS:
+    if len(keys) > PIECE_MAX_SCORES:
         raise CompileError(
-            f"{path}: {len(keys)} parts exceeds SONG_MAX_PARTS "
-            f"({SONG_MAX_PARTS})")
+            f"{path}: {len(keys)} parts exceeds PIECE_MAX_SCORES "
+            f"({PIECE_MAX_SCORES})")
 
     beats = melody.beats
     bar_ticks = melody.bar_ticks
@@ -500,10 +528,8 @@ def parse_song(path, lessons_by_stem, warn):
 
     parts = []
     for key in keys:
-        channel, name = PART_RECIPES[key]
-        if channel not in SONG_CHANNELS:   # the recipe table's contract
-            raise CompileError(f"{path}: part {key!r} channel {channel} "
-                               f"is not one of {SONG_CHANNELS}")
+        patch, name, transpose, fixed_pitch = PART_RECIPES[key]
+        patch = patches.get(key, patch)   # a spelled-out patch wins
         if key == "percussion":
             events = [(60, 96, 0)] * (nbars * beats)
         elif key == "bass":
@@ -528,8 +554,8 @@ def parse_song(path, lessons_by_stem, warn):
         if len(events) > MAX_EVENTS:
             raise CompileError(
                 f"{path}: part {name!r} has {len(events)} events, over "
-                f"the {MAX_EVENTS} a lesson_t can hold (load_song_part "
-                f"copies a part into one, unchecked)")
+                f"the {MAX_EVENTS} a lesson_t can hold (the firmware "
+                f"copies a score into one, unchecked)")
         if events and sum(t for _, t, _ in events) != total:
             raise CompileError(
                 f"{path}: part {name!r} spans "
@@ -553,13 +579,16 @@ def parse_song(path, lessons_by_stem, warn):
                          f"y {y}, outside the sheet's {SCROLL_MIN}.."
                          f"{SCROLL_MAX} band -- it will sound, but "
                          f"the player cannot see it on the staff")
-        parts.append(SongPart(key, channel, name, events))
+        parts.append(SongPart(key, patch, name, transpose,
+                              fixed_pitch, events))
     return Song(path, title, melody.headers["tempo"], beats, parts)
 
 
 # ---- emission ----------------------------------------------------------------
-# The text below is the generated file's contract: for a book that
-# compiled before this refactor, the output is byte-identical.
+# The text below is the generated file's contract: lesson emission
+# is byte-identical to before this refactor; the song's shape
+# changed in v0.31 (a piece_t of scores, each carrying its patch),
+# so song emission is not.
 
 def ev_list(events):
     return ",\n        ".join(f"{{ {m}, {t}, {r} }}" for m, t, r in events)
@@ -589,14 +618,16 @@ def emit_song(song):
             f"static const lesson_event_t {ident}_{p.key}_events"
             f"[{len(p.events)}] = {{\n"
             f"        {ev_list(p.events)}\n    }};\n")
-    lines = ["const song_t ode_song = {",
+    # A piece of scores: each score carries its own patch, so the
+    # firmware never routes by part again (v0.31).
+    lines = ["const piece_t ode_piece = {",
              f'    "{song.title}",',
              f"    {song.tempo}, {song.beats}, {len(song.parts)},",
              "    {"]
     for p in song.parts:
         ref = f"{ident}_{p.key}_events" if p.events else "0"
-        lines.append(f'        {{ {p.channel}, "{p.name}", '
-                     f'{len(p.events)}, {ref} }},')
+        lines.append(f'        {{ {p.patch}, {p.transpose}, {p.fixed_pitch}, '
+                     f'"{p.name}", {len(p.events)}, {ref} }},')
     lines.append("    }")
     lines.append("};")
     chunks.append("\n".join(lines) + "\n")
@@ -604,19 +635,18 @@ def emit_song(song):
 
 
 def emit_empty_song():
-    # The firmware references ode_song unconditionally (its tempo
-    # seeds the song sheet at boot), and an event-less part is the
-    # shape it already handles: the part exists, its channel is
-    # reserved, and there is nothing to learn yet (lesson.h). This
-    # is the same placeholder the host suites hand-write for
-    # song-less builds.
-    return ("/* no song: this book has no .song file, so ode_song is\n"
-            " * the empty song -- one reserved part, no events. */\n"
-            "const song_t ode_song = {\n"
+    # The firmware references ode_piece unconditionally (its tempo
+    # seeds the song sheet at boot), and an event-less score is the
+    # shape it already handles: the score exists, and there is
+    # nothing to learn yet (lesson.h). This is the same placeholder
+    # the host suites hand-write for song-less builds.
+    return ("/* no song: this book has no .song file, so ode_piece is\n"
+            " * the empty piece -- one reserved score, no events. */\n"
+            "const piece_t ode_piece = {\n"
             '    "Song",\n'
             "    96, 4, 1,\n"
             "    {\n"
-            '        { 9, "Percussion", 0, 0 },\n'
+            '        { SCORE_PATCH_DRUM, 0, 0, "Percussion", 0, 0 },\n'
             "    }\n"
             "};\n")
 

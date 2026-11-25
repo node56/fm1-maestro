@@ -10,13 +10,19 @@
  *
  * One event is one MIDI event: a delta time (ticks since the previous
  * event in the same track), a status byte, and up to two data bytes.
- * The status byte carries its MIDI channel in the low nibble, as in
- * any MIDI stream: on an ordinary sheet every note is channel 0, and
- * in a multi-part song (v0.26) a note's part IS its channel -- the
- * parts of a song live interleaved in the song sheet's one event
- * list, told apart only by channel.
- *   Note On:  status 0x90|channel, d1 = pitch (0..127), d2 = velocity.
- *   Note Off: status 0x80|channel, d1 = pitch, d2 = 0. A Note On with
+ * The status byte carries a score index in the low nibble, as a MIDI
+ * stream carries its channel there: on an ordinary sheet every note
+ * is score 0, and in a multi-part piece (v0.31) a note's score IS
+ * its low nibble -- the scores of a piece live interleaved in the
+ * piece sheet's one event list, told apart only by that tag. (Before
+ * v0.31 the tag was a MIDI channel -- melody 0, bass 1, harmony 2,
+ * percussion 9 -- and the patch was decided from it by a routing
+ * table; now the score carries its own patch and the tag only says
+ * which score a note belongs to, so the take still serializes as
+ * ordinary SMF: a format-1 file has one track per sheet, and in
+ * memory the single take array is partitioned the same way.)
+ *   Note On:  status 0x90|score, d1 = pitch (0..127), d2 = velocity.
+ *   Note Off: status 0x80|score, d1 = pitch, d2 = 0. A Note On with
  *             velocity 0 is a Note Off (standard MIDI convention)
  *             and is stored as one on parse.
  *   Marker:   status 0xFF, d1 = 0x06, d2 = 4, text "JUMP": the SEQ
@@ -51,6 +57,7 @@ typedef struct {
 } mev_t;
 
 static inline uint8_t mev_channel(const mev_t *e) { return e->status & 0x0Fu; }
+static inline uint8_t mev_score(const mev_t *e) { return e->status & 0x0Fu; }   /* the take's score tag (v0.31): the low nibble, as a channel would be */
 static inline uint8_t mev_is_note_on(const mev_t *e) { return (e->status & 0xF0u) == MIDI_NOTE_ON && e->d2 != 0; }
 static inline uint8_t mev_is_note_off(const mev_t *e) { return (e->status & 0xF0u) == MIDI_NOTE_OFF || ((e->status & 0xF0u) == MIDI_NOTE_ON && e->d2 == 0); }
 static inline uint8_t mev_is_jump(const mev_t *e) { return e->status == MIDI_META && e->d1 == MIDI_META_MARKER && e->d2 == MIDI_MARKER_JUMP_LEN; }

@@ -2,8 +2,10 @@
 """Verify v0.24: the practice loop, added on top of the tape recorder.
 
   park       a book piece is entered / switched to parked at its first
-             note: the first blue note sits at the cursor (x ~60),
-             where the book page shows it at x ~80.
+             note: the first blue note sits at the cursor (x ~60).
+             (v0.31: there is no book page any more -- HOME at the
+             park is a repaint-only no-op, and the parked view is
+             the only view.)
   wrong      a wrong first note while parked sounds, but starts
              nothing and records nothing (tape stopped, view frozen).
   kick       the correct first note kicks off REC: write bit on, tape
@@ -14,11 +16,11 @@
   scroll     KNOB4/KNOB3 still scrub while parked, and KNOB4 still
              snaps the playhead while a take rolls.
   good       a well-played take (every blue note pressed as the
-             playhead passes) plays back once (v0.25 replay), then
-             auto-loads the NEXT piece, parked at its first note,
-             tape stopped.
-  terrible   a take with 1 of 13 notes matched replays, then
-             reloads the SAME piece, parked (take cleared).
+             playhead passes) loads the NEXT piece at once, parked
+             at its first note, tape stopped. (v0.31: no replay --
+             the take ends straight into the load.)
+  terrible   a take with 1 of 13 notes matched loads the SAME
+             piece at once, parked (take cleared).
   playalong  PLAY without REC still just stops at the end (no load).
   free       Free Play is unchanged: an arbitrary note with REC armed
              still auto-starts the tape.
@@ -183,14 +185,17 @@ def shot(out, ms):
     return os.path.join(OUT, f"{out}-{ms}.ppm")
 
 # ---------------------------------------------------------------- park / refs
-# v0.25: the ref script boots parked (100), goes to the book with
-# HOME (500), re-enters parked with REC (900), SELECTs piece 1 (1300).
+# v0.31: the ref script boots parked (100), HOME at the park (300)
+# is a repaint-only no-op (500 == the boot park), REC arms (700),
+# SELECTs piece 1 (1100). There is no book page any more.
 run("v027_ref.txt", "v027_ref")
-lb_book = leftmost_blue(shot("v027_ref", 500))
+lb_home = leftmost_blue(shot("v027_ref", 500))
 lb_park0 = leftmost_blue(shot("v027_ref", 900))
 lb_park1 = leftmost_blue(shot("v027_ref", 1300))
-check("park: book page shows the first note at x ~80", lb_book is not None and 68 <= lb_book <= 84,
-      f"got {lb_book}")
+check("park: HOME at the park leaves the parked view (first note at the cursor)",
+      lb_home is not None and 48 <= lb_home <= 62, f"got {lb_home}")
+check("park: HOME at the park changes nothing (500 == the boot park)",
+      scroll_hash(shot("v027_ref", 500)) == scroll_hash(shot("v027_ref", 100)))
 check("park: piece 0 entered parked (first note at the cursor)", lb_park0 is not None and 48 <= lb_park0 <= 62,
       f"got {lb_park0}")
 check("park: SELECT on the tape parks piece 1 too", lb_park1 is not None and 48 <= lb_park1 <= 62,
@@ -299,9 +304,10 @@ lines += ["28000 shot", "29500 shot", "31000 end"]
 open(os.path.join(SCRIPTS, "v027_good.txt"), "w").write("\n".join(lines) + "\n")
 run("v027_good.txt", "v027_good", film=2)
 rows = led_series("v027_good")
-check("good: the take ends into a replay (PLAY still on at 15000)",
-      led_at(rows, 15000, 12) == 1, f"got {led_at(rows, 15000, 12)}")
-check("good: PLAY green after the replay (auto-loaded, parked) (v0.27 colour; was LED on)",
+check("good: the take ends straight into the load (PLAY green at 15000: parked, no replay) (v0.31)",
+      play_at(play_series("v027_good"), 15000) == (255, 0),
+      f"got {play_at(play_series('v027_good'), 15000)}")
+check("good: PLAY green after the load (auto-loaded, parked) (v0.27 colour; was LED on)",
       play_at(play_series("v027_good"), 28500) == (255, 0),
       f"got {play_at(play_series('v027_good'), 28500)}")
 check("good: the next piece (1) is loaded, parked at its first note",
@@ -316,9 +322,10 @@ check("good: the parked note is piece 1's E5 (row matches)",
 # ---------------------------------------------------------------- a terrible take -> same piece
 run("v027_terrible.txt", "v027_terrible", film=2)
 rows = led_series("v027_terrible")
-check("terrible: the take ends into a replay (PLAY still on at 15000)",
-      led_at(rows, 15000, 12) == 1, f"got {led_at(rows, 15000, 12)}")
-check("terrible: PLAY green after the replay (reloaded, parked) (v0.27 colour; was LED on)",
+check("terrible: the take ends straight into the reload (PLAY green at 15000: parked, no replay) (v0.31)",
+      play_at(play_series("v027_terrible"), 15000) == (255, 0),
+      f"got {play_at(play_series('v027_terrible'), 15000)}")
+check("terrible: PLAY green after the reload (reloaded, parked) (v0.27 colour; was LED on)",
       play_at(play_series("v027_terrible"), 28500) == (255, 0),
       f"got {play_at(play_series('v027_terrible'), 28500)}")
 check("terrible: the reloaded piece stays parked (28000 == 29500)",
@@ -374,7 +381,7 @@ open(TMP + "/firmware/src/lessons_data.c", "w").write(
     "const uint8_t all_lessons_count = 1;\n"
     "/* stub song (v0.26): the firmware references ode_song; this\n"
     " * variant has no song, so it provides an empty one. */\n"
-    "const song_t ode_song = { \"Ode to Joy\", 96, 4, 1, { { 9, \"Percussion\", 0, 0 } } };\n")
+    "const piece_t ode_piece = { \"Ode to Joy\", 96, 4, 1, { { SCORE_PATCH_DRUM, 0, 0, \"Percussion\", 0, 0 } } };\n")
 r = subprocess.run(["cc", "-O2", "-Wall", "-Wno-unused-function", "-DDINGHY_HOST",
                     '-DAPP_VER="dev"', "-Ifirmware/hal", "-Ifirmware/src",
                     "-Ifirmware/gen", "-o", TMP + "/dinghy", "firmware/src/dinghy.c"],

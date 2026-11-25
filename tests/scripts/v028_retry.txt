@@ -1,11 +1,10 @@
 # v028 terrible retry: kick off with C5, play one wrong note
 # (F#3, key 1, ~185 Hz) at ~2000, then nothing -- terrible. At the
-# end of the piece (~13.4 s) the take REPLAYS: the F#3 must be
-# audible in the replay (~15.4 s) and PLAY still on at 15000.
-# After the replay the same piece reloads with the take CLEARED:
-# the 28000 shot is the clean park. The retry kicks off at 28500;
-# when its playhead crosses the old F#3 position (~30.5 s) the
-# window must be SILENT -- the failed take no longer plays along.
+# end of the piece (~13.4 s) the same piece reloads at once with
+# the take CLEARED (v0.31: no replay): the 28000 shot is the clean
+# park. The retry kicks off at 28500; when its playhead crosses
+# the old F#3 position (~30.5 s) the window must be SILENT -- the
+# failed take no longer plays along.
 T
 100 btn 13
 500 keys 0x80

@@ -6,35 +6,37 @@ Three runs against the host build (plus a look at the song parked):
   open  -- the boot itself lands on the song (slot 0 in the v0.30
            book order), parked at the percussion part's first
            note: the guide showing is all on the pad key's pitch.
-  flow  -- a full percussion take (16 pad hits) replays and
-           auto-cues the bass part; during the bass take the
-           percussion take is audible as backing (a beat the bass
-           rests on carries the drum alone); a full bass take cues
-           the harmony (v0.30: a real part now -- chord tones on
-           channel 2, sounding through its fixed PIANO 1 patch),
-           whose take is backed by BOTH earlier takes; a full
-           harmony take cues the melody with all three backing
-           takes audible; after the melody take and its replay
-           the full assembly plays once (the engine's host
-           counters show 4+ voices at once, never more than 6, no
-           backing note dropped, no live voice ever stolen); the
-           song re-parks at the first part -- proved by kicking
-           the percussion part off again and hearing the NEW
-           take's first hit with the bass backing at beat 3, and
-           NO drum at beat 2, where the old percussion take had a
-           hit (re-starting the part cleared only its own take).
-  retry -- a terrible bass take (kick + three wrong notes) is
-           heard in its replay (the wrong note sounds, on the
-           bass channel's patch), then the retry reloads the bass
-           part with the bass take cleared and the percussion
-           take intact: at the wrong note's old position the
-           drum backing sounds and the wrong bass note does not.
+  flow  -- a full percussion take ends and auto-cues the bass
+           part (v0.31: no replay -- each take ends straight
+           into its cue); during the bass take the percussion
+           take is audible as backing (a beat the bass rests on
+           carries the drum alone); a full bass take cues the
+           harmony (v0.30: a real part now -- chord tones in
+           their own score, sounding through its fixed PIANO 1
+           patch), whose take is backed by BOTH earlier takes;
+           a full harmony take cues the melody with all three
+           backing takes audible; after the melody take the full
+           assembly plays once as ordinary playback (the
+           engine's host counters show 4+ voices at once, never
+           more than 6, no backing note dropped, no live voice
+           ever stolen); the song re-parks at the first part --
+           proved by kicking the percussion part off again and
+           hearing the NEW take's first hit with the bass
+           backing at beat 3, and NO drum at beat 2, where the
+           old percussion take had a hit (re-starting the part
+           cleared only its own take).
+  retry -- a terrible bass take (kick + three wrong notes) sounds
+           its wrong note as it is played (on the bass score's
+           patch), then the retry reloads the bass part with the
+           bass take cleared and the percussion take intact: at
+           the wrong note's old position the drum backing sounds
+           and the wrong bass note does not.
   led   -- the panel lights (v0.27): PLAY green while parked at
-           the song (where the boot lands) and in the book; REC
-           pulsing while merely armed, solid while a take rolls;
-           PLAY red steady while the tape rolls; HOME retry parks
-           the song part again (PLAY green), a second HOME goes
-           to the book (PLAY green there too).
+           the song (where the boot lands); REC pulsing while
+           merely armed, solid while a take rolls; PLAY red
+           steady while the tape rolls; HOME retry parks the
+           song part again (PLAY green), a second HOME stays
+           parked (v0.31: no book view any more).
 
 The song runs at 96 BPM = 51.2 px/s; the park is x=80 and the
 piece ends at x=576. Takes are played the way the v028 suite
@@ -259,8 +261,8 @@ check("harmony take beat 2 sounds the harmony over the drum backing "
 check("melody take beat 1 has all four parts (peak ~659 Hz, loud)",
       620 < peak_hz(a, sr, 62.5, 62.9) < 700 and rms(a, sr, 62.5, 62.9) > 2500,
       f"rms={rms(a, sr, 62.5, 62.9):.0f} peak={peak_hz(a, sr, 62.5, 62.9):.0f}")
-check("the full assembly plays once after the melody part",
-      rms(a, sr, 84.5, 85.0) > 2000, f"rms={rms(a, sr, 84.5, 85.0):.0f}")
+check("the full assembly plays once after the melody part (v0.31: ordinary playback, no replay before it -- the assembly runs ~72.2-82.3 s)",
+      rms(a, sr, 74.5, 75.0) > 2000, f"rms={rms(a, sr, 74.5, 75.0):.0f}")
 check("voice ceiling: 4+ voices at once in the assembly, never over 6",
       4 <= fm.get("max_active", 0) <= 6, str(fm))
 check("no backing note dropped, no live voice stolen for a backing note",
@@ -280,18 +282,19 @@ check("re-kick: beat 3 still has the bass backing (other takes untouched)",
 # ---------- retry ----------
 run(RETRY, "v029r", 2)
 a, sr = load("v029r")
-# the bass replay (~31.2-41.3 s) at the first wrong note's position:
-# recorded x ~137.9 -> replay reaches it at ~31.2 + (137.9-60)/51.2 = ~32.7 s.
-# The drum backing hits at the same position in both runs, so the
-# 535-575 Hz band (the wrong note: written 73, routed -12 on the
-# bass channel to 61, sounding ~554 Hz) is the discriminator:
-# present in the replay, absent after the retry.
-wrong = band_rms(a, sr, 32.6, 33.0, 535, 575)
-check("terrible bass take: the wrong note sounds in the replay (bass patch, ~554 Hz)",
+# The wrong note (written 73, routed -12 on the bass score to 61,
+# sounding ~554 Hz) is heard as it is played in the bass take: the
+# first wrong note is pressed at ~22.6 s. After the terrible take
+# ends (~31.2 s) the bass part reloads at once with its take
+# cleared; the retry kick at 42 s rolls over the same position at
+# ~43.1 s, where the drum backing (intact) hits and the wrong bass
+# note must not sound. The 535-575 Hz band is the discriminator.
+wrong = band_rms(a, sr, 22.6, 23.0, 535, 575)
+check("terrible bass take: the wrong note sounds as it is played (bass patch, ~554 Hz)",
       wrong > 150, f"band={wrong:.0f}")
 gone = band_rms(a, sr, 43.05, 43.45, 535, 575)
 check("after the retry the bass take is cleared (no bass note at the old position)",
-      gone < wrong / 2.5, f"band={gone:.0f} vs replay {wrong:.0f}")
+      gone < wrong / 2.5, f"band={gone:.0f} vs take {wrong:.0f}")
 check("after the retry the percussion take is intact (drum at the same position)",
       band_rms(a, sr, 43.05, 43.15, 300, 4000) > 800,
       f"atk={band_rms(a, sr, 43.05, 43.15, 300, 4000):.0f}")
@@ -313,7 +316,7 @@ check("REC solid while a take is actually recording",
       bool(bit_in(rows, REC, 7300, 12000)) and all(bit_in(rows, REC, 7300, 12000)))
 check("PLAY green again after the HOME retry parks the part (v0.27 colour; was solid on)",
       bool(play_in(prows, 12800, 14000)) and all(gr == 255 and rd == 0 for gr, rd in play_in(prows, 12800, 14000)))
-check("PLAY green in the book (second HOME) (v0.27: stopped is stopped; was dark)",
+check("PLAY green after the second HOME too (still parked: no book view any more) (v0.27: stopped is stopped)",
       bool(play_in(prows, 14800, 16000)) and all(gr == 255 and rd == 0 for gr, rd in play_in(prows, 14800, 16000)))
 
 print()

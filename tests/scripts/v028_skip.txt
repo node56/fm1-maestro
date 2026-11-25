@@ -1,8 +1,8 @@
-# v028 replay skip: the same terrible take as v028_retry, but a
-# key press (F3, key 0 -- a wrong note at the park) at 15000,
-# mid-replay, skips it: the load (same piece, cleared, parked)
-# has already happened by 16000, where the no-skip run is still
-# replaying.
+# v028 no-replay skip (v0.31): the same terrible take as
+# v028_retry, but a key press (F3, key 0 -- a wrong note at the
+# park) at 15000, after the take already loaded the same piece,
+# cleared, parked: the press is a ghost on the loaded piece, and
+# the 16000 shot is the clean park in both runs.
 T
 100 btn 13
 500 keys 0x80

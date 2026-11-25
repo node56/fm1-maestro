@@ -8,9 +8,9 @@
  * clear per frame, no flicker.
  *
  * Planes: black (staff, clef, bars, and the notes YOU play),
- * blue (the suggested notes, if a piece is loaded), amber (the
- * suggested notes a take missed, during its end-of-take replay).
+ * blue (the suggested notes, if a piece is loaded).
  * What you play is black; what the piece suggests is blue.
+ * (v0.31: the amber plane went with the end-of-take replay.)
  */
 #ifndef MAESTRO_UI_H
 #define MAESTRO_UI_H
@@ -32,7 +32,6 @@ void ui_clear(void);                       /* wipe all planes */
 void ui_staff_cols(uint32_t x0, uint32_t x1); /* draw staff lines for columns [x0,x1) */
 void ui_plane_black(void);                 /* draw in black (staff, your notes) */
 void ui_plane_blue(void);                  /* draw in blue (suggested notes) */
-void ui_plane_amber(void);                 /* draw in amber (missed notes, replay) */
 
 /* notation, drawn at absolute buffer x into the selected plane. */
 int32_t ui_dia(int32_t midi);              /* diatonic steps, E4 == 37 */
@@ -59,6 +58,6 @@ void ui_cursor_mark(uint32_t x);           /* amber playhead below the staff */
 #define UI_PAPER 0xF7BCu   /* warm paper */
 #define UI_INK 0x0000u     /* black: staff and your notes */
 #define UI_BLUE 0x001Fu    /* blue: suggested notes */
-#define UI_AMBER 0xFCE0u   /* amber: suggested notes a take missed (replay) */
+#define UI_AMBER 0xFCE0u   /* amber: the playhead triangle (v0.31: no longer a note plane) */
 
 #endif

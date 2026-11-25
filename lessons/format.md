@@ -87,19 +87,26 @@ file (a second one is an error — the firmware has one song slot):
 title:    Ode to Joy
 melody:   l02-ode-to-joy.lesson   # the lesson that is the melody part
 chart:    C | G | F | C           # one chord per bar of the melody
-parts:    percussion bass harmony melody   # learning order
+parts:    percussion:DRUM bass:BASS harmony:PIANO1 melody:PRESET   # learning order
 ```
+
+Each part names its score and its patch: a score is notes **and**
+the patch they sound with (v0.31). The patch may be left off
+(`percussion` alone means the recipe's default), but the shipped
+book spells it out. Known patches: `PRESET` (the PRESETS knob's
+current patch, resolved at trigger time), `PIANO1`, `BASS`,
+`DRUM`.
 
 The melody lesson sets the song's tempo, metre and length, and
 must fill whole bars. The other parts are generated at build time
 from the chart; the firmware only plays what it is given:
 
-| part | channel | generated as |
+| part | patch | generated as |
 |---|---|---|
-| `percussion` | 9 (GM drums) | a quarter-note pulse on every beat, written on the middle-C key (the drum pad) |
-| `bass` | 1 | the chart's chord root on beats 1 and 3, rests between, written an octave above where it sounds |
-| `harmony` | 2 | chord tones, one per beat, cycling root–3rd–5th–3rd through each bar, written around middle C (a tone above B5 folds down an octave); sounds as written |
-| `melody` | 0 | the lesson's events, unchanged |
+| `percussion` | `DRUM` | a quarter-note pulse on every beat, written on the middle-C key (the drum pad); sounds at one fixed low pitch (38) |
+| `bass` | `BASS` | the chart's chord root on beats 1 and 3, rests between, written an octave above where it sounds (sounds an octave below written) |
+| `harmony` | `PIANO1` | chord tones, one per beat, cycling root–3rd–5th–3rd through each bar, written around middle C (a tone above B5 folds down an octave); sounds as written |
+| `melody` | `PRESET` | the lesson's events, unchanged; sounds with the PRESETS knob's patch |
 
 `chart:` is required when `bass`, `percussion` or `harmony` is
 among the parts. The bass uses the chord roots; the harmony also

@@ -1,9 +1,9 @@
 # v028 boot (B): the PLAY+HOME ritual from boot. PLAY starts the
-# parked tape; HOME (parked by then? no -- rolling, with an empty
-# take) goes to the book; REC re-enters the tape parked. The
-# re-entered parked view (3000) must be IDENTICAL to the boot
-# parked view (script A, 500): boot now powers on in exactly the
-# state the ritual produces.
+# parked tape; HOME (rolling, with an empty take) stops, disarms
+# and rewinds to the park (v0.31: there is no book to go to);
+# REC re-arms. The parked view (3000) must be IDENTICAL to the
+# boot parked view (script A, 500): boot now powers on in exactly
+# the state the ritual produces.
 T
 200 btn 12
 2000 btn 8

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Maestro v0.25 checks: boot state, clean retries, HOME as the
-manual retry, and the end-of-take replay.
+"""Maestro v0.25 checks, as rewritten for v0.31 (no replay, no
+book view): boot state, clean retries, HOME as the manual retry,
+and the take ending straight into its load.
 
   boot       the device powers on on the tape, parked at the
              persisted piece's first note -- exactly the state
@@ -10,24 +11,25 @@ manual retry, and the end-of-take replay.
              press at boot is a parked press (it kicks the take
              off; the sheet rolls from the park, never jumps
              sideways -- the v0.24 bug shifted it +60 px).
-  retry      a terrible take replays first (its wrong note is
-             audible in the replay), then the same piece reloads
-             with the take CLEARED: during the retry's roll, the
-             old take's note position is silent (A/B against the
-             replay, where the same note sounded).
+  retry      a terrible take loads the same piece at once, with
+             the take CLEARED: during the retry's roll, the old
+             take's note position is silent (A/B against the
+             take itself, where the same note sounded).
   home       HOME on a book piece with a take -- stopped or
              still rolling -- clears the take and parks (one
              press = go again); HOME again, parked with an empty
-             take, reaches the book view.
-  inspect    a good take missing exactly one note (D5) replays
-             with that note drawn AMBER and the matched notes
-             still blue (no amber anywhere during the take
-             itself); the replay sounds the recorded notes; when
-             it finishes, the next piece loads.
-  skip       a key press mid-replay skips straight to the load.
+             take, stays parked (there is no book view any more).
+  inspect    a good take missing exactly one note (D5) ends
+             straight into the next piece, parked; during the
+             take the missed note stays blue (no amber plane
+             exists any more) and the take's notes sound as
+             they are played.
+  skip       (was: a key press mid-replay skips it.) There is no
+             replay to skip any more: a key press after the take
+             ends acts on the already-loaded piece.
   keep       a good take is still intact on its sheet after the
-             replay and the auto-load: SELECT back and PLAY, and
-             the recorded first note sounds.
+             auto-load: SELECT back and PLAY, and the recorded
+             first note sounds.
 
 Piece 0 at 72 BPM: 38.4 px/s; first note C5 (MIDI 72, key 7,
 mask 0x80) at piece-x 80; end bar at 576. A full take ends at
@@ -210,7 +212,6 @@ build()
 run("v027_ref.txt", "v028_ref")
 park0_hash = scroll_hash(shot("v028_ref", 900))
 park1_hash = scroll_hash(shot("v028_ref", 1300))
-book_hash = scroll_hash(shot("v028_ref", 500))
 
 # ------------------------------------------------------------ boot
 run("v028_boot_a.txt", "v028_boot_a", film=2)
@@ -226,18 +227,19 @@ lb1 = leftmost_blue(shot("v028_boot_a", 1600))
 check("boot: the sheet rolls left from the park (no +60 px jump)",
       lb1 is not None and lb0 is not None and 0 < lb1 < lb0, f"{lb0} -> {lb1}")
 run("v028_boot_b.txt", "v028_boot_b", film=2)
-check("boot: the PLAY+HOME ritual + REC lands on the identical view",
+check("boot: the PLAY+HOME ritual + REC lands on the identical view (HOME rewinds; no book any more)",
       scroll_hash(shot("v028_boot_b", 3000)) == scroll_hash(shot("v028_boot_a", 500)))
 
 # ------------------------------------------------------------ terrible retry
 run("v028_retry.txt", "v028_retry", film=2)
 rows = led_series("v028_retry")
-check("retry: the take ends into a replay (PLAY on at 15000)",
-      led_at(rows, 15000, 12) == 1, f"got {led_at(rows, 15000, 12)}")
-pk = peak_hz("v028_retry", 15.35, 15.95)
-check("retry: the failed take sounds in its replay (F#3 ~185 Hz)",
+check("retry: the take ends straight into the retry (PLAY green at 15000: parked, no replay) (v0.31)",
+      play_at(play_series("v028_retry"), 15000) == (255, 0),
+      f"got {play_at(play_series('v028_retry'), 15000)}")
+pk = peak_hz("v028_retry", 2.05, 2.65)
+check("retry: the failed take sounds as it is played (F#3 ~185 Hz)",
       165 < pk < 205, f"peak {pk:.0f} Hz")
-check("retry: after the replay the piece is parked, take cleared",
+check("retry: after the load the piece is parked, take cleared",
       scroll_hash(shot("v028_retry", 28000)) == park0_hash)
 check("retry: the old take is silent during the retry's roll",
       wav_rms("v028_retry", 30.05, 30.65) < 120,
@@ -246,26 +248,32 @@ pk2 = peak_hz("v028_retry", 30.05, 30.65)
 check("retry: no F#3 peak at the old note's position",
       not (165 < pk2 < 205), f"peak {pk2:.0f} Hz")
 
-# ------------------------------------------------------------ replay skip
+# ------------------------------------------------------------ no replay to skip (v0.31)
+# The same script presses F3 at 15000, after the terrible take
+# already loaded the same piece, cleared, parked: the press is a
+# ghost on the loaded piece (wrong pitch for the kick-off), and
+# the no-press run is parked there too -- there is no replay
+# phase for either run to be in.
 run("v028_skip.txt", "v028_skip", film=2)
 srows = led_series("v028_skip")
-check("skip: a key press mid-replay loads at once (PLAY green at 16000: parked) (v0.27 colour; was LED on)",
+check("skip: a key press after the take ends finds the piece already loaded (PLAY green at 16000: parked) (v0.27 colour; was LED on)",
       play_at(play_series("v028_skip"), 16000) == (255, 0),
       f"got {play_at(play_series('v028_skip'), 16000)}")
-check("skip: the no-skip run is still replaying at 16000 (A/B)",
-      led_at(rows, 16000, 12) == 1, f"got {led_at(rows, 16000, 12)}")
-check("skip: the skipped load is the same piece, cleared, parked",
+check("skip: the no-press run is parked at 16000 too (no replay phase) (A/B)",
+      play_at(play_series("v028_retry"), 16000) == (255, 0),
+      f"got {play_at(play_series('v028_retry'), 16000)}")
+check("skip: the press was a ghost, not a kick-off (view still the park at 16000)",
       scroll_hash(shot("v028_skip", 16000)) == park0_hash)
 
 # ------------------------------------------------------------ HOME retry
 run("v028_home.txt", "v028_home", film=2)
 check("home: a stopped take is cleared and parked by HOME",
       scroll_hash(shot("v028_home", 4000)) == park0_hash)
-check("home: HOME again (parked, empty take) reaches the book",
-      scroll_hash(shot("v028_home", 5000)) == book_hash)
+check("home: HOME again (parked, empty take) stays parked (no book view any more)",
+      scroll_hash(shot("v028_home", 5000)) == park0_hash)
 lb = leftmost_blue(shot("v028_home", 5000))
-check("home: the book page shows the first note at x ~80",
-      lb is not None and 68 <= lb <= 84, f"got {lb}")
+check("home: still parked at the first note (note at the cursor)",
+      lb is not None and 48 <= lb <= 62, f"got {lb}")
 run("v028_home_roll.txt", "v028_home_roll", film=2)
 check("home: a rolling take is stopped, cleared and parked by HOME",
       scroll_hash(shot("v028_home_roll", 3000)) == park0_hash)
@@ -277,19 +285,19 @@ check("home: PLAY green after the rolling HOME retry (parked) (v0.27 colour; was
 # ------------------------------------------------------------ replay inspection
 gen_take("v028_inspect.txt", skip_x=112)   # miss exactly D5
 run("v028_inspect.txt", "v028_inspect", film=2)
-check("inspect: no amber anywhere during the take itself",
+check("inspect: no amber anywhere during the take itself (no amber plane any more)",
       amber_px(shot("v028_inspect", 1500)) == 0,
       f"got {amber_px(shot('v028_inspect', 1500))}")
-check("inspect: the missed note (D5) draws amber in the replay",
-      amber_px(shot("v028_inspect", 14600)) > 20,
-      f"got {amber_px(shot('v028_inspect', 14600))}")
-check("inspect: matched notes stay blue in the replay",
-      blue_px(shot("v028_inspect", 14600)) > 100,
-      f"got {blue_px(shot('v028_inspect', 14600))}")
-check("inspect: the replay sounds the take's notes (G5 ~17.2 s)",
-      wav_rms("v028_inspect", 17.05, 17.45) > 200,
-      f"rms {wav_rms('v028_inspect', 17.05, 17.45):.0f}")
-check("inspect: a finished replay loads the next piece, parked",
+check("inspect: the missed note (D5) stays blue during the take (the guide itself is the feedback)",
+      blue_px(shot("v028_inspect", 1500)) > 100,
+      f"got {blue_px(shot('v028_inspect', 1500))}")
+check("inspect: the take's notes sound as they are played (G5 ~3.7 s)",
+      wav_rms("v028_inspect", 3.7, 4.1) > 200,
+      f"rms {wav_rms('v028_inspect', 3.7, 4.1):.0f}")
+check("inspect: the take ends straight into the load (PLAY green at 14600: parked, no replay)",
+      play_at(play_series("v028_inspect"), 14600) == (255, 0),
+      f"got {play_at(play_series('v028_inspect'), 14600)}")
+check("inspect: the next piece is loaded, parked",
       scroll_hash(shot("v028_inspect", 27000)) == park1_hash)
 
 # ------------------------------------------------------------ good take kept
